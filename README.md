@@ -90,6 +90,41 @@ SQL 입력창은 제공하지 않습니다. 메타데이터는 정확히 일치�
 
 비밀번호는 세션 메모리 또는 선택한 OS 키체인에 보관하며 SQLite·설정 내보내기에 포함하지 않습니다. 중간 파일에는 원본 데이터가 들어 있으므로 접근 가능한 폴더를 제한하세요. 성공하면 중간 데이터 파일을 정리하고 이력·로그를 남깁니다. 실패 파일은 재시도용으로 보관합니다. 앱은 로컬 개인 사용을 전제로 하므로 외부에 공개하지 마세요.
 
+## 로컬 테스트 DB
+
+Docker Desktop 실행 후 프로젝트 폴더에서 MariaDB 11.4를 시작합니다.
+
+```sh
+docker compose -f compose.test.yml up -d --wait
+```
+
+DBeaver 등 DB 클라이언트나 앱의 연결 설정에서 다음 정보를 사용합니다.
+
+| 항목 | 값 |
+| --- | --- |
+| 호스트 | `127.0.0.1` |
+| 포트 | `33316` |
+| 사용자 | `root` |
+| 비밀번호 | `snapshot-test-only` |
+| DB/schema | 최초에는 미지정. 아래 생성 후 Source는 `snapshot_source`, Target은 `snapshot_target` |
+
+CLI 접속은 다음 명령을 실행하고 위 비밀번호를 입력합니다.
+
+```sh
+docker compose -f compose.test.yml exec mariadb mariadb -u root -p
+```
+
+앱에서 수동 테스트하려면 접속 후 DB를 생성하고 원본에 테스트 테이블·데이터를 준비하세요.
+
+```sql
+CREATE DATABASE IF NOT EXISTS snapshot_source;
+CREATE DATABASE IF NOT EXISTS snapshot_target;
+```
+
+**공개된 로컬 테스트 전용 계정이며 운영 환경 사용 금지입니다.** 비밀번호를 운영·공유 DB에서 재사용하거나 실제 운영 데이터·개인정보를 저장하지 마세요. [compose.test.yml](compose.test.yml)의 `127.0.0.1` 바인딩을 유지하고 외부에 포트를 공개하지 마세요.
+
+일시 중지는 `docker compose -f compose.test.yml stop`, 컨테이너와 테스트 데이터 정리는 `docker compose -f compose.test.yml down -v`입니다.
+
 ## 개발 검증
 
 ```sh
