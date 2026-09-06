@@ -125,7 +125,9 @@ python3 scripts/start_demo_db.py
 
 Windows에서는 `py -3 scripts/start_demo_db.py`를 실행합니다. 어느 폴더에서 호출해도 프로젝트의 Docker 설정을 사용합니다.
 
-스크립트가 MariaDB 11.4 **원본·대상 컨테이너 2개**를 시작하고 준비 완료를 기다린 뒤 DB와 아래 합성 데이터를 생성합니다. 재실행하면 누락된 샘플 ID만 추가하며 기존 행과 대상 데이터는 유지합니다.
+스크립트가 MariaDB 11.4 **원본·대상 컨테이너 2개**를 시작하고 준비 완료를 기다린 뒤 각각의 인스턴스에 DB를 생성합니다. 원본 컨테이너에는 `snapshot_source`와 샘플 데이터만, 대상 컨테이너에는 빈 `snapshot_target`만 생성합니다. 실행 후 두 인스턴스의 서버 식별자와 교차 DB 생성을 자동 확인합니다. 재실행하면 누락된 샘플 ID만 추가하며 기존 행과 대상 데이터는 유지합니다.
+
+이전 버전에서 원본 컨테이너에 잘못 생성된 `snapshot_target` 또는 대상 컨테이너에 잘못 생성된 `snapshot_source`가 있으면, 스크립트가 해당 **교차 테스트 schema만** 삭제하고 올바른 인스턴스에 다시 준비합니다.
 
 | 원본 테이블 | 최초 생성 행 수 | 확인할 내용 |
 | --- | ---: | --- |
@@ -153,7 +155,7 @@ docker compose -f compose.test.yml exec mariadb mariadb -u root -p
 
 **기존 Target 연결은 포트를 `33318`로 수정·저장하세요.** 같은 인스턴스의 `33316/snapshot_target`은 이제 차단합니다. 기존 DB는 삭제하지 않으며 새 대상에 자동 이전하지 않습니다. 대상 CLI는 위 명령의 `mariadb`를 `mariadb-target`으로 바꾸세요.
 
-DB와 데이터는 준비 스크립트가 생성하므로 별도 SQL 입력이 필요 없습니다. 생성 SQL은 [scripts/demo_data.sql](scripts/demo_data.sql)에서 확인할 수 있습니다.
+DB와 데이터는 준비 스크립트가 생성하므로 별도 SQL 입력이 필요 없습니다. 생성 SQL은 [scripts/demo_data.sql](scripts/demo_data.sql), [scripts/target_db.sql](scripts/target_db.sql)에서 확인할 수 있습니다.
 
 **공개된 로컬 테스트 전용 계정이며 운영 환경 사용 금지입니다.** 비밀번호를 운영·공유 DB에서 재사용하거나 실제 운영 데이터·개인정보를 저장하지 마세요. [compose.test.yml](compose.test.yml)의 `127.0.0.1` 바인딩을 유지하고 외부에 포트를 공개하지 마세요.
 

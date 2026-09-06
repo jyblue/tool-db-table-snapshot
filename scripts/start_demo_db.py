@@ -8,28 +8,61 @@ ROOT = Path(__file__).resolve().parents[1]
 COMPOSE = ["docker", "compose", "-f", str(ROOT / "compose.test.yml")]
 
 
+def load_sql(service, path):
+    return subprocess.run(
+        [
+            *COMPOSE,
+            "exec",
+            "-T",
+            service,
+            "sh",
+            "-c",
+            'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" exec mariadb -u root --default-character-set=utf8mb4',
+        ],
+        cwd=ROOT,
+        input=path.read_bytes(),
+        check=True,
+        capture_output=True,
+        text=False,
+    )
+
+
+def query(service, statement):
+    result = subprocess.run(
+        [
+            *COMPOSE,
+            "exec",
+            "-T",
+            service,
+            "sh",
+            "-c",
+            'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" exec mariadb -u root --batch --skip-column-names -e "$1"',
+            "mariadb",
+            statement,
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip().splitlines()
+
+
 def main():
     try:
         subprocess.run([*COMPOSE, "up", "-d", "--wait"], cwd=ROOT, check=True)
-        sql = Path(__file__).with_name("demo_data.sql").read_text(encoding="utf-8")
-        for service, statements in (
-            ("mariadb", sql),
-            ("mariadb-target", "CREATE DATABASE IF NOT EXISTS snapshot_target CHARACTER SET utf8mb4;"),
-        ):
-            subprocess.run(
-                [
-                    *COMPOSE,
-                    "exec",
-                    "-T",
-                    service,
-                    "sh",
-                    "-c",
-                    'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" exec mariadb -u root --default-character-set=utf8mb4',
-                ],
-                cwd=ROOT,
-                input=statements.encode("utf-8"),
-                check=True,
-            )
+        load_sql("mariadb", Path(__file__).with_name("demo_data.sql"))
+        load_sql("mariadb-target", Path(__file__).with_name("target_db.sql"))
+        source_id = query("mariadb", "SELECT @@hostname, @@port, @@server_id")[0]
+        target_id = query("mariadb-target", "SELECT @@hostname, @@port, @@server_id")[0]
+        if source_id == target_id:
+            raise RuntimeError("Source와 Target이 같은 MariaDB 인스턴스입니다.")
+        # Remove schemas left by the old single-instance demo layout. These names
+        # are test-only; the real target schema on mariadb-target is preserved.
+        if "snapshot_target" in query("mariadb", "SHOW DATABASES"):
+            query("mariadb", "DROP DATABASE `snapshot_target`")
+        if "snapshot_source" in query("mariadb-target", "SHOW DATABASES"):
+            query("mariadb-target", "DROP DATABASE `snapshot_source`")
     except FileNotFoundError:
         print("Docker Desktop을 설치하고 실행한 뒤 다시 시도하세요.", file=sys.stderr)
         return 1
