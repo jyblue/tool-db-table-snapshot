@@ -10,6 +10,8 @@ from pathlib import Path
 import streamlit as st
 
 from snapshot import db, process
+from snapshot.compare import available_dates, target_tables
+from snapshot.compare import compare as compare_target
 from snapshot.engine import build_spec, check_disk, reconcile, validate_job
 from snapshot.history_ui import history_page, job_page
 from snapshot.secrets import delete_secret, password, safe_error, save_secret
@@ -172,7 +174,9 @@ if page == STEPS[0]:
     }
     defaults = demo_defaults if selected == "new" else {}
     if selected == "new":
-        st.info("새 연결은 로컬 Docker 테스트 DB 기본값으로 시작합니다. 운영 DB를 연결할 때는 모든 값을 바꾸세요.")
+        st.info(
+            "새 연결은 로컬 Docker 테스트 DB 기본값으로 시작합니다. 운영 DB를 연결할 때는 모든 값을 바꾸세요."
+        )
     with st.form("profile_" + role + "_" + selected):
         name = st.text_input(
             "연결 이름", p.get("name", defaults.get("name", "")), placeholder="예: 운영 원본 / 로컬 분석 DB"
@@ -520,6 +524,64 @@ elif page == HISTORY_PAGES[0]:
 
 elif page == HISTORY_PAGES[1]:
     history_page(store, go)
+
+elif page == HISTORY_PAGES[2]:
+    require_connections()
+    st.write("대상 DB의 같은 테이블을 두 기준일로 비교합니다. 원본 DB에는 연결하지 않습니다.")
+    target_ids = targets
+    target_id = st.selectbox("비교할 대상 DB", target_ids, format_func=lambda x: label(profiles[x]))
+    target_profile = profiles[target_id]
+    credentials([target_profile], "compare")
+    conn = None
+    try:
+        conn = db.connect(target_profile, password(target_profile, secrets), target=True)
+        names = target_tables(conn, target_profile["database"])
+        if not names:
+            st.info("비교할 대상 스냅샷 테이블이 없습니다. 먼저 전체 실행을 완료하세요.")
+            st.stop()
+        table = st.selectbox("대상 테이블", names)
+        dates = available_dates(conn, target_profile["database"], table)
+        if len(dates) < 2:
+            st.info("비교하려면 같은 테이블에 서로 다른 기준일의 스냅샷이 두 개 이상 필요합니다.")
+            st.stop()
+        older = st.selectbox("이전 기준일", dates, format_func=str)
+        newer = st.selectbox("비교 기준일", [date for date in dates if date != older], format_func=str)
+        max_rows = st.number_input("날짜별 최대 비교 행 수", 1, 5000, 5000, step=100)
+        if st.button("행 비교", type="primary"):
+            result = compare_target(conn, target_profile["database"], table, older, newer, int(max_rows))
+            st.session_state["compare_result"] = result
+        result = st.session_state.get("compare_result")
+        if result and result["table"] == table and result["older"] == older and result["newer"] == newer:
+            if result["truncated"]:
+                st.warning("비교 행 수 상한에 도달했습니다. 전체 차이가 아니라 상한 내 결과입니다.")
+            st.dataframe(
+                {
+                    "구분": ["이전 행 수", "비교 행 수", "추가", "삭제", "변경"],
+                    "값": [
+                        result["older_count"],
+                        result["newer_count"],
+                        len(result["added"]),
+                        len(result["removed"]),
+                        len(result["changed"]),
+                    ],
+                },
+                hide_index=True,
+                use_container_width=True,
+            )
+            changes = []
+            changes.extend({"구분": "추가", "키": repr(key), "변경 컬럼": "—"} for key in result["added"])
+            changes.extend({"구분": "삭제", "키": repr(key), "변경 컬럼": "—"} for key in result["removed"])
+            changes.extend(
+                {"구분": "변경", "키": repr(item["key"]), "변경 컬럼": ", ".join(item["columns"])}
+                for item in result["changed"]
+            )
+            st.subheader("차이 샘플")
+            st.dataframe(changes, hide_index=True, use_container_width=True)
+    except Exception as exc:
+        report(exc)
+    finally:
+        if conn:
+            conn.close()
 
 else:
     if not runs:

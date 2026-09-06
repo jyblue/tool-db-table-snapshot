@@ -8,7 +8,7 @@ from decimal import Decimal
 import pymysql
 import pytest
 
-from snapshot import db, process
+from snapshot import compare, db, process
 from snapshot.engine import Engine, build_spec, reconcile
 from snapshot.store import Store
 
@@ -675,6 +675,26 @@ def test_source_examined_limit_never_returns_partial_success(env, protected_sour
             "SELECT s FROM no_key ORDER BY s LIMIT 1000 ROWS EXAMINED 10", streaming=True
         ):
             pytest.fail("Partial result must not reach a caller")
+
+
+def test_target_date_compare_reports_changed_and_removed_rows(env):
+    store, root, _, _, _ = env
+    assert run(env, date="2026-09-06")["state"] == "SUCCESS"
+    query(root, "UPDATE snapshot_source.records SET s='changed' WHERE a=0 AND b=0")
+    query(root, "DELETE FROM snapshot_source.records WHERE a=0 AND b=1")
+    assert run(env, date="2026-09-07")["state"] == "SUCCESS"
+    root.target_conn.select_db("snapshot_target")
+    result = compare.compare(
+        root.target_conn,
+        "snapshot_target",
+        "records",
+        dt.date(2026, 9, 6),
+        dt.date(2026, 9, 7),
+    )
+    assert result["older_count"] == 1205
+    assert result["newer_count"] == 1204
+    assert result["removed"] == [(0, 1)]
+    assert result["changed"][0]["key"] == (0, 0)
 
 
 def test_shared_instance_is_rejected_even_with_different_schema(env):

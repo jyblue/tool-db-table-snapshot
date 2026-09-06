@@ -3,7 +3,7 @@
 import json
 
 STEPS = ["1. 연결 설정", "2. 복사 작업", "3. 소량 테스트", "4. 전체 실행", "5. 결과·복구"]
-HISTORY_PAGES = ["작업 조회", "실행 이력"]
+HISTORY_PAGES = ["작업 조회", "실행 이력", "날짜별 비교"]
 NAVIGATION = STEPS + HISTORY_PAGES
 RUN_LABELS = {
     "QUEUED": "시작 준비 중",
