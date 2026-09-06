@@ -75,6 +75,7 @@ def main():
     print("\n준비 완료: Source=127.0.0.1:33316 / Target=127.0.0.1:33318 / root / snapshot-test-only")
     print("앱 DB명: Source=snapshot_source, Target=snapshot_target")
     print("원본 테이블: demo_customers, demo_orders, demo_order_items (모두 PK 배치 읽기 지원)")
+    print("비교 확인용 Target 테이블: demo_compare (2026-09-06 / 2026-09-07)")
     print("기존 행과 대상 데이터는 유지됩니다. 테스트 전용이며 운영 환경에 사용하지 마세요.")
     return 0
 
