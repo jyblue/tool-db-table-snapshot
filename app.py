@@ -162,19 +162,35 @@ if page == STEPS[0]:
         format_func=lambda x: "＋ 새 연결 등록" if x == "new" else label(profiles[x]),
     )
     p = profiles.get(selected, {})
+    demo_defaults = {
+        "name": "로컬 Docker 원본" if role == "source" else "로컬 Docker 대상",
+        "host": "127.0.0.1",
+        "port": 33316 if role == "source" else 33318,
+        "database": "snapshot_source" if role == "source" else "snapshot_target",
+        "user": "root",
+        "secret": "snapshot-test-only",
+    }
+    defaults = demo_defaults if selected == "new" else {}
+    if selected == "new":
+        st.info("새 연결은 로컬 Docker 테스트 DB 기본값으로 시작합니다. 운영 DB를 연결할 때는 모든 값을 바꾸세요.")
     with st.form("profile_" + role + "_" + selected):
-        name = st.text_input("연결 이름", p.get("name", ""), placeholder="예: 운영 원본 / 로컬 분석 DB")
+        name = st.text_input(
+            "연결 이름", p.get("name", defaults.get("name", "")), placeholder="예: 운영 원본 / 로컬 분석 DB"
+        )
         c1, c2 = st.columns([3, 1])
         host = c1.text_input(
             "호스트",
-            p.get("host", "localhost"),
+            p.get("host", defaults.get("host", "localhost")),
             help="DB 서버 주소입니다. 로컬 DB라면 localhost를 입력하세요.",
         )
-        port = c2.number_input("포트", 1, 65535, int(p.get("port", 3306)))
-        database = st.text_input("DB명", p.get("database", ""))
-        user = st.text_input("사용자", p.get("user", ""))
+        port = c2.number_input("포트", 1, 65535, int(p.get("port", defaults.get("port", 3306))))
+        database = st.text_input("DB명", p.get("database", defaults.get("database", "")))
+        user = st.text_input("사용자", p.get("user", defaults.get("user", "")))
         secret = st.text_input(
-            "비밀번호", type="password", help="이미 등록한 연결은 공란이면 기존 비밀번호를 사용합니다."
+            "비밀번호",
+            value=defaults.get("secret", ""),
+            type="password",
+            help="이미 등록한 연결은 공란이면 기존 비밀번호를 사용합니다.",
         )
         persist = st.checkbox(
             "이 PC의 안전한 자격 증명 저장소에 비밀번호 저장", value=bool(p.get("secret_ref"))

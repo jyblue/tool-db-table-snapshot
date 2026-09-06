@@ -72,6 +72,21 @@ def test_save_source_then_target_then_job_then_test(tmp_path, monkeypatch):
     assert any("성공한 소량 테스트가 없는" in w.value for w in app.warning)
 
 
+def test_new_connections_prefill_local_docker_defaults(tmp_path, monkeypatch):
+    monkeypatch.setenv("SNAPSHOT_HOME", str(tmp_path / "state"))
+    app = AppTest.from_file(str(APP)).run(timeout=20)
+
+    assert next(e for e in app.text_input if e.label == "호스트").value == "127.0.0.1"
+    assert next(e for e in app.text_input if e.label == "DB명").value == "snapshot_source"
+    assert next(e for e in app.text_input if e.label == "사용자").value == "root"
+    assert next(e for e in app.number_input if e.label == "포트").value == 33316
+    assert next(e for e in app.text_input if e.label == "비밀번호").value == "snapshot-test-only"
+
+    app.radio[0].set_value("target").run()
+    assert next(e for e in app.text_input if e.label == "DB명").value == "snapshot_target"
+    assert next(e for e in app.number_input if e.label == "포트").value == 33318
+
+
 def test_start_moves_to_results_and_success_test_reuses_selection(tmp_path, monkeypatch):
     from snapshot import process
 
