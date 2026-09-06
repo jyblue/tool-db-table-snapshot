@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mariadb-table-snapshot"
+version = "0.1.0"
+description = "Local MariaDB analytical snapshot tool"
+requires-python = ">=3.11"
+dependencies = ["streamlit>=1.40,<2", "PyMySQL>=1.1.1,<2", "keyring>=25,<26", "psutil>=6,<8"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<9", "ruff>=0.11"]
+
+[tool.setuptools.packages.find]
+include = ["snapshot*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: requires disposable MariaDB"]
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

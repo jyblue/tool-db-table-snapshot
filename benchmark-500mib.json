@@ -1,0 +1,14 @@
+{
+  "state": "SUCCESS",
+  "error": null,
+  "tables": 1,
+  "mib_per_table": 500,
+  "elapsed_seconds": 24.0521989580011,
+  "peak_worker_rss_bytes": 247988224,
+  "peak_local_file_bytes": 699119857,
+  "target_redo_bytes_delta": 1054023591,
+  "target_table_bytes_estimate": 32768,
+  "publication_seconds_sampled": 2.7614844999916386,
+  "extracted_rows": 2000,
+  "notes": "Synthetic repeated 256KiB BLOB rows; 100ms samples; excludes seeding; redo includes staging and publication."
+}

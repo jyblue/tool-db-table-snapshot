@@ -1,0 +1,37 @@
+name: Snapshot tests
+on: [push, pull_request]
+jobs:
+  portable:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e ".[test]"
+      - run: python -m ruff check .
+      - run: python -m pytest -q -m "not integration"
+  mariadb:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: snapshot-test-only
+        ports:
+          - 33316:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=2s --health-timeout=5s --health-retries=30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e ".[test]"
+      - run: python -m pytest -q
+        env:
+          SNAPSHOT_TEST_PORT: '33316'
