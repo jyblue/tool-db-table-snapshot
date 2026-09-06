@@ -92,11 +92,24 @@ SQL 입력창은 제공하지 않습니다. 메타데이터는 정확히 일치�
 
 ## 로컬 테스트 DB
 
-Docker Desktop 실행 후 프로젝트 폴더에서 MariaDB 11.4를 시작합니다.
+Docker Desktop을 실행한 뒤 프로젝트 폴더에서 준비 스크립트를 실행합니다. Python 표준 라이브러리만 사용하므로 별도 패키지 설치는 필요 없습니다.
 
 ```sh
-docker compose -f compose.test.yml up -d --wait
+# macOS / Linux
+python3 scripts/start_demo_db.py
 ```
+
+Windows에서는 `py -3 scripts/start_demo_db.py`를 실행합니다. 어느 폴더에서 호출해도 프로젝트의 Docker 설정을 사용합니다.
+
+스크립트가 MariaDB 11.4를 시작하고 준비 완료를 기다린 뒤 원본·대상 DB와 아래 합성 데이터를 생성합니다. 재실행하면 누락된 샘플 ID만 추가하며 기존 행과 대상 데이터는 유지합니다.
+
+| 원본 테이블 | 최초 생성 행 수 | 확인할 내용 |
+| --- | ---: | --- |
+| `demo_customers` | 100 | 한글·이모지·NULL |
+| `demo_orders` | 1,200 | 배치 분할·소수 금액·날짜·개행 |
+| `demo_order_items` | 2,400 | 복합 PK |
+
+앱에서 원본·대상 연결을 저장하고 접속 확인 후, **복사 작업**에서 위 테이블을 선택하세요. 읽기 방식은 **PK 배치**, 배치 크기는 **100**으로 시작하고 **소량 테스트 → 전체 실행 → 결과·복구** 순서로 확인합니다. 대상 스냅샷 테이블은 앱이 생성합니다.
 
 DBeaver 등 DB 클라이언트나 앱의 연결 설정에서 다음 정보를 사용합니다.
 
@@ -106,7 +119,7 @@ DBeaver 등 DB 클라이언트나 앱의 연결 설정에서 다음 정보를 �
 | 포트 | `33316` |
 | 사용자 | `root` |
 | 비밀번호 | `snapshot-test-only` |
-| DB/schema | 최초에는 미지정. 아래 생성 후 Source는 `snapshot_source`, Target은 `snapshot_target` |
+| 앱 DB명 (필수) | Source: `snapshot_source` / Target: `snapshot_target` |
 
 CLI 접속은 다음 명령을 실행하고 위 비밀번호를 입력합니다.
 
@@ -114,12 +127,7 @@ CLI 접속은 다음 명령을 실행하고 위 비밀번호를 입력합니다.
 docker compose -f compose.test.yml exec mariadb mariadb -u root -p
 ```
 
-앱에서 수동 테스트하려면 접속 후 DB를 생성하고 원본에 테스트 테이블·데이터를 준비하세요.
-
-```sql
-CREATE DATABASE IF NOT EXISTS snapshot_source;
-CREATE DATABASE IF NOT EXISTS snapshot_target;
-```
+DB와 데이터는 준비 스크립트가 생성하므로 별도 SQL 입력이 필요 없습니다. 생성 SQL은 [scripts/demo_data.sql](scripts/demo_data.sql)에서 확인할 수 있습니다.
 
 **공개된 로컬 테스트 전용 계정이며 운영 환경 사용 금지입니다.** 비밀번호를 운영·공유 DB에서 재사용하거나 실제 운영 데이터·개인정보를 저장하지 마세요. [compose.test.yml](compose.test.yml)의 `127.0.0.1` 바인딩을 유지하고 외부에 포트를 공개하지 마세요.
 
