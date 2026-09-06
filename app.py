@@ -11,9 +11,18 @@ import streamlit as st
 
 from snapshot import db, process
 from snapshot.engine import build_spec, check_disk, reconcile, validate_job
+from snapshot.history_ui import history_page, job_page
 from snapshot.secrets import delete_secret, password, safe_error, save_secret
 from snapshot.store import ACTIVE, Store
-from snapshot.workflow import RUN_LABELS, STAGE_LABELS, STEPS, initial_step, latest_tests
+from snapshot.workflow import (
+    HISTORY_PAGES,
+    NAVIGATION,
+    RUN_LABELS,
+    STAGE_LABELS,
+    STEPS,
+    initial_step,
+    latest_tests,
+)
 
 st.set_page_config(
     page_title="MariaDB Snapshot", page_icon="🗃️", layout="wide", initial_sidebar_state="expanded"
@@ -31,7 +40,7 @@ active = any(r["state"] in ACTIVE or r["publish_pending"] for r in runs)
 
 
 def go(step, message=None):
-    st.session_state["_next_step"] = STEPS[step - 1]
+    st.session_state["_next_step"] = NAVIGATION[step - 1]
     if step in (3, 4):
         st.session_state.pop("pick_test" if step == 3 else "pick_full", None)
     if message:
@@ -93,7 +102,7 @@ if "_next_step" in st.session_state:
     st.session_state["workflow_step"] = st.session_state.pop("_next_step")
 st.session_state.setdefault("workflow_step", initial_step(profiles, jobs, runs))
 st.sidebar.title("스냅샷 만들기")
-page = st.sidebar.radio("진행 순서", STEPS, key="workflow_step")
+page = st.sidebar.radio("진행 순서 및 조회", NAVIGATION, key="workflow_step")
 st.sidebar.caption(f"원본 {len(sources)}개 · 대상 {len(targets)}개 · 복사 작업 {len(jobs)}개")
 if active and page != STEPS[4]:
     st.sidebar.info("진행 중인 실행 또는 복구할 결과가 있습니다.")
@@ -274,9 +283,14 @@ elif page == STEPS[1]:
     st.write(
         "**원본 테이블 하나 → 대상 테이블 하나**를 복사 작업으로 저장하세요. 여러 테이블은 작업을 각각 추가합니다."
     )
+    if "_edit_job" in st.session_state:
+        st.session_state["job_editor"] = st.session_state.pop("_edit_job")
+    if st.session_state.get("job_editor") not in ["new", *jobs]:
+        st.session_state["job_editor"] = "new"
     selected = st.selectbox(
         "작업 선택",
         ["new", *jobs],
+        key="job_editor",
         format_func=lambda x: "＋ 새 복사 작업" if x == "new" else jobs[x]["name"],
     )
     j = jobs.get(selected, {})
@@ -492,6 +506,12 @@ elif page in STEPS[2:4]:
         except Exception as exc:
             report(exc)
 
+elif page == HISTORY_PAGES[0]:
+    job_page(store, go, active)
+
+elif page == HISTORY_PAGES[1]:
+    history_page(store, go)
+
 else:
     if not runs:
         st.info("아직 실행한 기록이 없습니다. 연결과 복사 작업을 준비한 뒤 소량 테스트를 시작하세요.")
@@ -500,6 +520,14 @@ else:
             go(STEPS.index(next_step) + 1)
         st.stop()
     ids = [r["id"] for r in runs]
+    requested = st.session_state.get("view_run")
+    if requested and requested not in ids:
+        # History browsing may open any persisted run, including one older than the recent 100.
+        try:
+            store.run(requested)
+            ids.insert(0, requested)
+        except ValueError:
+            st.session_state.pop("view_run", None)
     view = st.selectbox(
         "확인할 실행",
         ids,

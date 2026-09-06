@@ -104,6 +104,7 @@ def force_stop(store, run_id):
     # Recheck immediately before terminating, including creation time and run ID.
     if not owned_process(store.run(run_id)):
         raise ValueError("프로세스 식별이 변경되었습니다.")
+    store.record_activity("FORCE_STOP_REQUESTED", run_id)
     process.kill()
     try:
         process.wait(timeout=5)
@@ -149,3 +150,4 @@ def cleanup(store, run_id, ephemeral):
     for item in store.tables(run_id):
         if item["file"] and Path(item["file"]).parent == directory:
             store.update_table(run_id, item["ordinal"], file=None)
+    store.record_activity("FILES_CLEANED", run_id)

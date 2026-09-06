@@ -26,6 +26,7 @@ def main():
         )
         if result.rowcount != 1:
             return 2
+        store._event(con, "WORKER_STARTED", actor="system", run_id=args.run_id)
     try:
         Engine(store, args.run_id, secrets).execute()
     except BaseException as exc:

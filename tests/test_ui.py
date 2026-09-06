@@ -4,7 +4,7 @@ from pathlib import Path
 from streamlit.testing.v1 import AppTest
 
 from snapshot.store import Store
-from snapshot.workflow import STEPS, initial_step, latest_tests
+from snapshot.workflow import NAVIGATION, STEPS, initial_step, latest_tests
 
 APP = Path(__file__).resolve().parents[1] / "app.py"
 
@@ -25,7 +25,7 @@ def test_first_visit_has_ordered_steps_and_blocked_steps_explain_next_action(tmp
     monkeypatch.setenv("SNAPSHOT_HOME", str(tmp_path / "state"))
     app = AppTest.from_file(str(APP)).run(timeout=20)
     assert not app.exception
-    assert app.sidebar.radio[0].options == STEPS
+    assert app.sidebar.radio[0].options == NAVIGATION
     assert app.sidebar.radio[0].value == STEPS[0]
     app.sidebar.radio[0].set_value(STEPS[3]).run()
     assert not app.exception
