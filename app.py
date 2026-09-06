@@ -569,10 +569,31 @@ elif page == HISTORY_PAGES[2]:
                 use_container_width=True,
             )
             changes = []
-            changes.extend({"구분": "추가", "키": repr(key), "변경 컬럼": "—"} for key in result["added"])
-            changes.extend({"구분": "삭제", "키": repr(key), "변경 컬럼": "—"} for key in result["removed"])
             changes.extend(
-                {"구분": "변경", "키": repr(item["key"]), "변경 컬럼": ", ".join(item["columns"])}
+                {
+                    "구분": "추가",
+                    "키": repr(item["key"]),
+                    "행 데이터": json.dumps(item["row"], ensure_ascii=False, default=str),
+                    "변경 컬럼": "—",
+                }
+                for item in result["added"]
+            )
+            changes.extend(
+                {
+                    "구분": "삭제",
+                    "키": repr(item["key"]),
+                    "행 데이터": json.dumps(item["row"], ensure_ascii=False, default=str),
+                    "변경 컬럼": "—",
+                }
+                for item in result["removed"]
+            )
+            changes.extend(
+                {
+                    "구분": "변경",
+                    "키": repr(item["key"]),
+                    "행 데이터": "—",
+                    "변경 컬럼": ", ".join(item["columns"]),
+                }
                 for item in result["changed"]
             )
             st.subheader("차이 샘플")

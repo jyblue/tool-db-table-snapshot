@@ -37,8 +37,10 @@ def test_compare_reports_added_removed_changed(monkeypatch):
     result = compare.compare(conn, "target", "orders", dt.date(2026, 9, 6), dt.date(2026, 9, 7))
     assert result["older_count"] == 2
     assert result["newer_count"] == 2
-    assert result["added"] == [(3,)]
-    assert result["removed"] == [(2,)]
+    assert result["added"][0]["key"] == (3,)
+    assert result["added"][0]["row"] == {"snapshot_date": dt.date(2026, 9, 7), "id": 3, "status": "added"}
+    assert result["removed"][0]["key"] == (2,)
+    assert result["removed"][0]["row"] == {"snapshot_date": dt.date(2026, 9, 6), "id": 2, "status": "same"}
     assert result["changed"][0]["key"] == (1,)
     assert result["changed"][0]["columns"] == {"status": {"older": "old", "newer": "new"}}
 

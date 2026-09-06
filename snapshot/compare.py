@@ -65,6 +65,13 @@ def compare(conn, database, table, older, newer, max_rows=MAX_ROWS):
     new_rows, new_truncated = load(newer)
     added_keys = sorted(new_rows.keys() - old_rows.keys(), key=repr)
     removed_keys = sorted(old_rows.keys() - new_rows.keys(), key=repr)
+    added = [
+        {"key": row_key, "row": dict(zip(columns, new_rows[row_key]))} for row_key in added_keys[:MAX_CHANGES]
+    ]
+    removed = [
+        {"key": row_key, "row": dict(zip(columns, old_rows[row_key]))}
+        for row_key in removed_keys[:MAX_CHANGES]
+    ]
     changed = []
     for row_key in sorted(old_rows.keys() & new_rows.keys(), key=repr):
         old_row, new_row = old_rows[row_key], new_rows[row_key]
@@ -81,8 +88,8 @@ def compare(conn, database, table, older, newer, max_rows=MAX_ROWS):
         "newer": newer,
         "older_count": len(old_rows),
         "newer_count": len(new_rows),
-        "added": added_keys[:MAX_CHANGES],
-        "removed": removed_keys[:MAX_CHANGES],
+        "added": added,
+        "removed": removed,
         "changed": changed,
         "truncated": old_truncated or new_truncated,
     }

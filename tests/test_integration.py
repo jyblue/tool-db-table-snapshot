@@ -693,7 +693,9 @@ def test_target_date_compare_reports_changed_and_removed_rows(env):
     )
     assert result["older_count"] == 1205
     assert result["newer_count"] == 1204
-    assert result["removed"] == [(0, 1)]
+    assert result["removed"][0]["key"] == (0, 1)
+    assert result["removed"][0]["row"]["a"] == 0
+    assert result["removed"][0]["row"]["b"] == 1
     assert result["changed"][0]["key"] == (0, 0)
 
 
