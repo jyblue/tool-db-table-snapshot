@@ -6,9 +6,9 @@
 
 ## 로컬 실행
 
-Git 설치 없이 [최신 Release](https://github.com/jyblue/tool-db-table-snapshot/releases/latest)에서 **`mariadb-snapshot-v0.1.0.zip`**을 다운로드하고 압축을 푸세요. 아래 명령은 압축을 푼 프로젝트 폴더에서 실행합니다.
+Git 설치 없이 [최신 Release](https://github.com/jyblue/tool-db-table-snapshot/releases/latest)에서 **`mariadb-snapshot-v0.2.0.zip`**을 다운로드하고 압축을 푸세요. 아래 명령은 압축을 푼 프로젝트 폴더에서 실행합니다.
 
-Python **3.11 이상**, 원본 MariaDB 접속 정보, 쓰기 가능한 별도 대상 DB/schema, 중간 파일용 디스크 공간이 필요합니다. 대상 schema는 미리 생성하세요. 스냅샷 테이블은 앱이 생성합니다. 일반 사용에는 Docker가 필요 없습니다.
+Python **3.11 이상**, 원본 MariaDB 접속 정보, 별도 MariaDB 인스턴스의 쓰기 가능한 대상 DB/schema, 중간 파일용 디스크 공간이 필요합니다. 대상 schema는 미리 생성하세요. 스냅샷 테이블은 앱이 생성합니다. 일반 사용에는 Docker가 필요 없습니다.
 
 프로젝트 폴더에서 실행합니다.
 
@@ -47,17 +47,18 @@ Windows에서는 `python3` 대신 `py -3`, `.venv/bin/python` 대신 `.venv\Scri
 
 ### 원본(Source)
 
-쓰기 권한이 있는 계정도 **매 연결마다 읽기 전용 세션으로 설정**합니다. 설정·검증에 실패하면 즉시 연결을 닫고 작업을 실패 처리합니다. 재시도는 새 연결에서 동일하게 설정하며, 드라이버의 자동 재연결은 사용하지 않습니다.
+쓰기 권한이 있는 계정도 **매 연결마다 읽기 전용 세션으로 설정**합니다. 설정·검증에 실패하면 연결을 닫고 작업을 중단합니다. 원본 추출은 통신 오류가 나도 자동으로 처음부터 재조회하지 않습니다. 수동 재시도 시에도 모든 제한을 다시 적용합니다.
 
 | 구분 | 허용 / 차단 |
 | --- | --- |
-| 연결 초기화 | 드라이버의 문자셋·autocommit 설정, UTC `SET SESSION time_zone`, `SET SESSION TRANSACTION READ ONLY`, `SELECT @@session.tx_read_only` 검증만 내부 수행 |
+| 연결 초기화 | 드라이버의 문자셋·autocommit 설정, UTC `SET SESSION time_zone`, `READ ONLY`·`READ COMMITTED`, 실행/잠금/통신 제한 설정 및 세션 값 검증을 내부 수행 |
 | 서버 정보 | 고정된 `SELECT VERSION()`, `SELECT @@hostname, @@port, @@server_id, @@datadir` 허용 |
 | 테이블·컬럼·인덱스 | 코드에 정의된 `information_schema.TABLES / COLUMNS / STATISTICS` 조회 템플릿만 허용 |
-| 데이터 읽기 | 앱이 생성한 컬럼 조회, 키 비교 `WHERE`, `ORDER BY`, `LIMIT` 및 연결 테스트용 `SELECT * FROM 테이블 LIMIT 0` 허용 |
+| 데이터 읽기 | 앱이 생성한 `SELECT SQL_NO_CACHE`, 키 비교 `WHERE`, `ORDER BY`, `LIMIT … ROWS EXAMINED`와 해당 쿼리의 `EXPLAIN`만 허용 |
 | 데이터 변경 | `INSERT`, `UPDATE`, `DELETE`, `REPLACE`, `LOAD DATA` 등 실행 인터페이스에서 차단 |
 | 구조 변경 | `CREATE`, `ALTER`, `TRUNCATE`, `DROP`, `RENAME` 등 차단 |
 | 위험한 조회 | `SELECT … INTO OUTFILE/DUMPFILE`, `FOR UPDATE`, `LOCK IN SHARE MODE`, 임의 함수·UDF·`SLEEP()` 호출 차단 |
+| 동시 조회 제한 | 앱 전용 `GET_LOCK(…, 0)`으로 서버당 Source 연결 1개만 허용. 테이블/행 잠금이 아니며 연결 종료 시 반환 |
 | 기타 임의 SQL | `CALL`, 쓰기 모드로 변경하는 `SET`·`START TRANSACTION`, 주석·다중 문장, `SELECT 1`을 포함한 미등록 조회 모두 차단 |
 
 SQL 입력창은 제공하지 않습니다. 메타데이터는 정확히 일치하는 템플릿만 받고, 데이터 조회는 테이블·컬럼명을 백틱으로 이스케이프하고 조건 값을 바인딩해 생성합니다. 읽기 결과에는 `execute()`나 연결 객체를 노출하지 않습니다. 단순히 `SELECT`로 시작하는지만 검사하지 않습니다.
@@ -76,13 +77,15 @@ SQL 입력창은 제공하지 않습니다. 메타데이터는 정확히 일치�
 | 동시 실행·복구 | `GET_LOCK`(연결 종료 시 반환), 실행 마커 조회 |
 | 정리·연결 테스트 | 앱의 staging 테이블 `DROP TABLE`, 테스트용 임시 테이블 생성·적재·삭제·제거 |
 
-앱은 대상에 `UPDATE`나 `TRUNCATE`를 사용하지 않지만, 대상 계정 자체의 SQL 방화벽을 제공하는 것은 아닙니다. **대상 계정의 권한은 전용 분석 schema로 제한하세요.** 원본과 대상이 동일 서버·동일 schema로 확인되면 쓰기 전에 차단하지만, 잘못 등록한 별도 운영 schema까지 판별하지는 못합니다.
+앱은 대상에 `UPDATE`나 `TRUNCATE`를 사용하지 않지만, 대상 계정 자체의 SQL 방화벽을 제공하는 것은 아닙니다. **대상 계정의 권한은 전용 분석 schema로 제한하세요.** 원본과 대상이 같은 MariaDB 인스턴스이면 schema가 달라도 차단합니다. 대상 재연결·복구·정리 시에도 다시 검사합니다. 다른 운영 서버를 잘못 등록한 경우까지 판별하지는 못합니다.
 
 대상 적재 속도·전체 반영 크기의 상한과 대상 DB 용량 감시는 아직 제공하지 않습니다. 날짜 인덱스 누락 및 잠금 충돌 테스트 결과와 보강 항목은 [대상 DB 안전성 점검](TARGET_SAFETY.md)을 확인하세요.
 
+원본 보호 제한: SQL 실행 **2초**, 잠금 대기 **1초**, 배치 **최대 1,000행·수신 값 약 8MiB**, 조사 행 **2,000**, 대기 **최소 100ms + 느린 조회에 비례한 추가 대기**, 추출 시간 예산 **10분**. 상한·경고가 발생하면 부분 결과를 버리고 실패 처리합니다. 이 값은 서버 부하 무영향이나 정확한 중단 시각을 보장하지 않습니다. 상세 검증·잔여 위험은 [원본 DB 보호](SOURCE_SAFETY.md)를 참고하세요.
+
 ## 복사·복구 규칙
 
-- 원본 **InnoDB** 테이블을 지원합니다. PK 또는 NOT NULL 전체 UNIQUE 키가 있으면 키 기반 배치 조회, 키가 없으면 스트리밍을 사용합니다.
+- 원본 **InnoDB + PK 또는 NOT NULL 전체 UNIQUE 키**를 사용해 배치 조회합니다. 기존 스트리밍 설정도 키 배치로 처리하며, 키가 없는 테이블은 **1,000행 이하 소량 테스트만** 허용합니다.
 - 대상에 `snapshot_date`를 추가합니다. 원본에 같은 컬럼이 있거나 대상 스키마가 맞지 않으면 차단합니다. 원본의 생성 컬럼은 값으로 저장하며, 트리거·FK·CHECK 등은 복제하지 않습니다.
 - 원본을 중간 파일로 추출하고 대상 staging에 적재·검증한 후, 선택한 모든 테이블의 해당 기준일 데이터를 하나의 트랜잭션으로 교체합니다. 다른 날짜는 유지합니다. 한 실행은 같은 Target 연결을 사용합니다.
 - 원본 전체의 단일 시점 일관성은 보장하지 않습니다. 원본 갱신이 적은 시간에 실행하세요. 최초 실패 시 대상에 빈 테이블이 남을 수 있습니다.
@@ -105,7 +108,7 @@ python3 scripts/start_demo_db.py
 
 Windows에서는 `py -3 scripts/start_demo_db.py`를 실행합니다. 어느 폴더에서 호출해도 프로젝트의 Docker 설정을 사용합니다.
 
-스크립트가 MariaDB 11.4를 시작하고 준비 완료를 기다린 뒤 원본·대상 DB와 아래 합성 데이터를 생성합니다. 재실행하면 누락된 샘플 ID만 추가하며 기존 행과 대상 데이터는 유지합니다.
+스크립트가 MariaDB 11.4 **원본·대상 컨테이너 2개**를 시작하고 준비 완료를 기다린 뒤 DB와 아래 합성 데이터를 생성합니다. 재실행하면 누락된 샘플 ID만 추가하며 기존 행과 대상 데이터는 유지합니다.
 
 | 원본 테이블 | 최초 생성 행 수 | 확인할 내용 |
 | --- | ---: | --- |
@@ -120,7 +123,7 @@ DBeaver 등 DB 클라이언트나 앱의 연결 설정에서 다음 정보를 �
 | 항목 | 값 |
 | --- | --- |
 | 호스트 | `127.0.0.1` |
-| 포트 | `33316` |
+| 포트 | Source: `33316` / Target: `33318` |
 | 사용자 | `root` |
 | 비밀번호 | `snapshot-test-only` |
 | 앱 DB명 (필수) | Source: `snapshot_source` / Target: `snapshot_target` |
@@ -130,6 +133,8 @@ CLI 접속은 다음 명령을 실행하고 위 비밀번호를 입력합니다.
 ```sh
 docker compose -f compose.test.yml exec mariadb mariadb -u root -p
 ```
+
+**기존 Target 연결은 포트를 `33318`로 수정·저장하세요.** 같은 인스턴스의 `33316/snapshot_target`은 이제 차단합니다. 기존 DB는 삭제하지 않으며 새 대상에 자동 이전하지 않습니다. 대상 CLI는 위 명령의 `mariadb`를 `mariadb-target`으로 바꾸세요.
 
 DB와 데이터는 준비 스크립트가 생성하므로 별도 SQL 입력이 필요 없습니다. 생성 SQL은 [scripts/demo_data.sql](scripts/demo_data.sql)에서 확인할 수 있습니다.
 
@@ -144,7 +149,7 @@ DB와 데이터는 준비 스크립트가 생성하므로 별도 SQL 입력이 �
 .venv/bin/ruff check .
 .venv/bin/pytest -q -m 'not integration'
 docker compose -f compose.test.yml up -d --wait
-SNAPSHOT_TEST_PORT=33316 .venv/bin/pytest -q tests/test_integration.py
+SNAPSHOT_TEST_PORT=33316 SNAPSHOT_TEST_TARGET_PORT=33318 .venv/bin/pytest -q tests/test_integration.py
 docker compose -f compose.test.yml down -v
 ```
 

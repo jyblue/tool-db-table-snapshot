@@ -26,6 +26,15 @@ jobs:
         options: >-
           --health-cmd="healthcheck.sh --connect --innodb_initialized"
           --health-interval=2s --health-timeout=5s --health-retries=30
+      mariadb-target:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: snapshot-test-only
+        ports:
+          - 33318:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=2s --health-timeout=5s --health-retries=30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,3 +44,4 @@ jobs:
       - run: python -m pytest -q
         env:
           SNAPSHOT_TEST_PORT: '33316'
+          SNAPSHOT_TEST_TARGET_PORT: '33318'

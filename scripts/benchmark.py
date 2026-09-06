@@ -18,6 +18,7 @@ from snapshot.store import Store
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=33316)
+    parser.add_argument("--target-port", type=int, default=33318)
     parser.add_argument("--tables", type=int, default=1)
     parser.add_argument("--mib-per-table", type=int, default=16)
     parser.add_argument("--output", default="benchmark-result.json")
@@ -28,10 +29,16 @@ def main():
     root = pymysql.connect(
         host="127.0.0.1", port=args.port, user="root", password="snapshot-test-only", autocommit=True
     )
-    with root.cursor() as cur:
-        for name in ("snapshot_bench_source", "snapshot_bench_target"):
+    target_root = pymysql.connect(
+        host="127.0.0.1", port=args.target_port, user="root", password="snapshot-test-only", autocommit=True
+    )
+    if args.port == args.target_port:
+        parser.error("Source and Target must use separate MariaDB instances")
+    for conn, name in ((root, "snapshot_bench_source"), (target_root, "snapshot_bench_target")):
+        with conn.cursor() as cur:
             cur.execute(f"DROP DATABASE IF EXISTS `{name}`")
             cur.execute(f"CREATE DATABASE `{name}`")
+    with root.cursor() as cur:
         cur.execute("CREATE USER IF NOT EXISTS 'snapshot_bench_reader'@'%' IDENTIFIED BY 'bench-read-only'")
         cur.execute("GRANT SELECT ON snapshot_bench_source.* TO 'snapshot_bench_reader'@'%'")
         for i in range(args.tables):
@@ -42,6 +49,7 @@ def main():
                 cur.execute(
                     f"INSERT INTO snapshot_bench_source.t{i} VALUES (%s,REPEAT(%s,262144))", (row, "x")
                 )
+    with target_root.cursor() as cur:
         cur.execute("SHOW GLOBAL STATUS LIKE 'Innodb_os_log_written'")
         redo_before = int(cur.fetchone()[1])
     state_dir = Path(tempfile.mkdtemp(prefix="snapshot-benchmark-"))
@@ -57,7 +65,13 @@ def main():
         tls=False,
     )
     target = dict(
-        source, id="t", name="Benchmark target", role="target", database="snapshot_bench_target", user="root"
+        source,
+        id="t",
+        name="Benchmark target",
+        role="target",
+        database="snapshot_bench_target",
+        user="root",
+        port=args.target_port,
     )
     for p in (source, target):
         store.save("connection_profile", p)
@@ -74,7 +88,7 @@ def main():
                     source_table=f"t{i}",
                     target_table=f"t{i}",
                     read_mode="pk",
-                    batch_rows=1000,
+                    batch_rows=16,
                     wait_ms=300,
                     connect_timeout=10,
                     read_timeout=120,
@@ -111,7 +125,7 @@ def main():
             )
             next_report = time.monotonic() + 10
         time.sleep(0.1)
-    with root.cursor() as cur:
+    with target_root.cursor() as cur:
         cur.execute("SHOW GLOBAL STATUS LIKE 'Innodb_os_log_written'")
         redo_after = int(cur.fetchone()[1])
         for i in range(args.tables):
@@ -139,6 +153,7 @@ def main():
     Path(args.output).write_text(json.dumps(result, indent=2), encoding="utf8")
     print(json.dumps(result, indent=2), flush=True)
     root.close()
+    target_root.close()
     return 0 if run["state"] == "SUCCESS" else 1
 
 

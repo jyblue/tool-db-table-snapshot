@@ -18,11 +18,17 @@ pytestmark = pytest.mark.integration
 @pytest.fixture
 def env(tmp_path):
     port = os.environ.get("SNAPSHOT_TEST_PORT")
-    if not port:
-        pytest.skip("Set SNAPSHOT_TEST_PORT for disposable MariaDB integration tests")
+    target_port = os.environ.get("SNAPSHOT_TEST_TARGET_PORT")
+    if not port or not target_port:
+        pytest.skip("Set SNAPSHOT_TEST_PORT and SNAPSHOT_TEST_TARGET_PORT to separate disposable servers")
     root = pymysql.connect(
         host="127.0.0.1", port=int(port), user="root", password="snapshot-test-only", autocommit=True
     )
+    root.target_conn = pymysql.connect(
+        host="127.0.0.1", port=int(target_port), user="root", password="snapshot-test-only", autocommit=True
+    )
+    query(root.target_conn, "DROP DATABASE IF EXISTS snapshot_target")
+    query(root.target_conn, "CREATE DATABASE snapshot_target CHARACTER SET utf8mb4")
     with root.cursor() as c:
         c.execute("DROP DATABASE IF EXISTS snapshot_source")
         c.execute("DROP DATABASE IF EXISTS snapshot_target")
@@ -68,7 +74,7 @@ def env(tmp_path):
         name="target",
         role="target",
         host="127.0.0.1",
-        port=int(port),
+        port=int(target_port),
         database="snapshot_target",
         user="root",
         tls=False,
@@ -92,6 +98,7 @@ def env(tmp_path):
     )
     store.save("backup_job", j)
     yield store, root, j, {"s": "read-test-only", "t": "snapshot-test-only"}, tmp_path / "files"
+    root.target_conn.close()
     root.close()
 
 
@@ -105,6 +112,8 @@ def run(env, ids=["j"], date="2026-09-06", limit=None, engine_cls=Engine, retry_
 
 
 def query(root, sql):
+    if hasattr(root, "target_conn") and "snapshot_target" in sql:
+        root = root.target_conn
     with root.cursor() as c:
         c.execute(sql)
         return c.fetchall()
@@ -147,12 +156,11 @@ def test_empty_stream_and_no_key_rejection(env):
     s, root, j, _, _ = env
     s.save("backup_job", dict(j, id="e", source_table="empty", target_table="empty"))
     s.save("backup_job", dict(j, id="n", source_table="no_key", target_table="no_key", read_mode="stream"))
-    result = run(env, ["e", "n"])
-    assert result["state"] == "SUCCESS", result["error"]
-    assert query(root, "SELECT COUNT(*) FROM snapshot_target.empty")[0][0] == 0
-    assert query(root, "SELECT COUNT(*) FROM snapshot_target.no_key")[0][0] == 3
-    s.save("backup_job", dict(j, id="n", source_table="no_key", target_table="no_key"))
-    assert run(env, ["n"])["state"] == "FAILED"
+    assert run(env, ["e"])["state"] == "SUCCESS"
+    result = run(env, ["n"])
+    assert result["state"] == "FAILED" and "키 없는 전체 읽기" in result["error"]
+    assert run(env, ["n"], limit=1000)["state"] == "SUCCESS"
+    assert run(env, ["n"], limit=1001)["state"] == "FAILED"
 
 
 def test_failed_load_reuses_file_and_preserves_snapshot(env):
@@ -307,6 +315,9 @@ def test_actual_worker_cancel_and_force_stop(env, force):
     if force:
         assert result["server_status"] == "로컬 종료 완료 / 서버 종료 미확인"
         assert not process.owned_process(result)
+    deadline = time.monotonic() + 10
+    while process.owned_process(s.run(rid)) and time.monotonic() < deadline:
+        time.sleep(0.05)
     process.cleanup(s, rid, secrets)
 
 
@@ -337,7 +348,7 @@ def test_twenty_tables_one_source_connection(env, monkeypatch):
     assert len(env[0].tables(result["id"])) == 20
 
 
-def test_extract_disconnect_restarts_from_beginning(env, monkeypatch):
+def test_extract_disconnect_stops_without_automatic_rescan(env, monkeypatch):
     from contextlib import contextmanager
 
     original = db.Source.read
@@ -366,9 +377,9 @@ def test_extract_disconnect_restarts_from_beginning(env, monkeypatch):
     s.save("backup_job", dict(j, retries=1))
     monkeypatch.setattr(db.Source, "read", read)
     result = run(env)
-    assert result["state"] == "SUCCESS", result["error"]
+    assert result["state"] == "FAILED", result["error"]
     assert failed
-    assert query(root, "SELECT COUNT(*) FROM snapshot_target.records")[0][0] == 1205
+    assert query(root, "SELECT COUNT(*) FROM snapshot_target.records")[0][0] == 0
 
 
 def test_target_schema_mismatch_keeps_data(env):
@@ -415,7 +426,7 @@ def test_load_disconnect_rebuilds_staging(env):
 def test_same_physical_schema_blocks_before_target_ddl(env):
     s, root, j, _, _ = env
     target = next(p for p in s.profiles() if p["id"] == "t")
-    s.save("connection_profile", dict(target, database="snapshot_source", host="localhost"))
+    s.save("connection_profile", dict(target, database="snapshot_source", host="localhost", port=root.port))
     result = run(env)
     assert result["state"] == "FAILED" and "같은 서버" in result["error"]
     assert (
@@ -481,7 +492,7 @@ def test_bit_enum_set_auto_increment_timestamp_and_unique_key(env):
 
 def test_target_connection_test_checks_source_alias_first(env):
     profiles = {p["id"]: p for p in env[0].profiles()}
-    target = dict(profiles["t"], database=profiles["s"]["database"])
+    target = dict(profiles["t"], database=profiles["s"]["database"], port=profiles["s"]["port"])
     with pytest.raises(ValueError, match="같은 서버"):
         db.test_connection(target, env[3]["t"], [profiles["s"]], lambda p: env[3][p["id"]])
 
@@ -532,12 +543,12 @@ def test_target_row_lock_timeout_rolls_back_entire_publication(env):
             query(conn, "SET SESSION innodb_lock_wait_timeout=1")
             return conn
 
-    root.begin()
+    root.target_conn.begin()
     try:
         query(root, "SELECT * FROM snapshot_target.records_second WHERE a=0 FOR UPDATE")
         result = run(env, ["j", "second"], engine_cls=ShortLockWait)
     finally:
-        root.rollback()
+        root.target_conn.rollback()
     assert result["state"] == "INTERRUPTED" and not result["publish_pending"]
     assert "1205" in result["error"]
     for table in ("records", "records_second"):
@@ -548,11 +559,16 @@ def test_target_row_lock_timeout_rolls_back_entire_publication(env):
 def test_target_without_date_index_is_currently_accepted(env):
     # Characterization of an open load risk, not an assertion that this is safe.
     store, root, job, _, _ = env
-    store.save("backup_job", dict(job, source_table="no_key", target_table="no_key", read_mode="stream"))
-    assert run(env)["state"] == "SUCCESS"
+    expected = db.expected_schema(
+        db.schema(lambda sql, args: db.rows(root, sql, args), "snapshot_source", "no_key")
+    )
+    query(root, "USE snapshot_target")
+    db.prepare(root.target_conn, "snapshot_target", "no_key", expected)
     query(root, "ALTER TABLE snapshot_target.no_key DROP INDEX snapshot_date_idx")
-    assert run(env)["state"] == "SUCCESS"  # Missing non-unique index is not checked yet.
-    with root.cursor(pymysql.cursors.DictCursor) as cursor:
+    db.prepare(
+        root.target_conn, "snapshot_target", "no_key", expected
+    )  # Non-unique index is not checked yet.
+    with root.target_conn.cursor(pymysql.cursors.DictCursor) as cursor:
         cursor.execute("EXPLAIN DELETE FROM snapshot_target.no_key WHERE snapshot_date='2026-09-06'")
         plan = cursor.fetchone()
     assert plan["type"] == "ALL" and plan["key"] is None
@@ -579,3 +595,104 @@ def test_target_load_batches_but_publication_is_one_statement(env, monkeypatch):
     assert run(env)["state"] == "SUCCESS"
     assert batches == [1000, 205]
     assert len(publications) == 1  # Publication does not inherit the load batch limit.
+
+
+@pytest.fixture
+def protected_source(env):
+    profile = next(p for p in env[0].profiles() if p["id"] == "s")
+    source = db.Source(profile, env[3]["s"])
+    try:
+        yield source
+    finally:
+        source.close()
+
+
+def test_source_server_timeout_and_mutex(env, protected_source):
+    source = protected_source
+    started = time.monotonic()
+    # Bypass templates only in this isolated test to prove the server-side bound.
+    with pytest.raises(pymysql.OperationalError) as error:
+        query(source._conn, "SELECT SLEEP(10)")
+    assert error.value.args[0] == 1969
+    assert time.monotonic() - started < 5
+    profile = next(p for p in env[0].profiles() if p["id"] == "s")
+    with pytest.raises(ValueError, match="다른 스냅샷"):
+        db.Source(profile, env[3]["s"])
+    source.close()
+    replacement = db.Source(profile, env[3]["s"])
+    replacement.close()
+
+
+def test_source_read_does_not_wait_for_row_writer_or_hold_mdl(env, protected_source):
+    root, source = env[1], protected_source
+    columns = [{"name": "a"}, {"name": "b"}, {"name": "s"}]
+    root.begin()
+    try:
+        query(root, "UPDATE snapshot_source.records SET s='uncommitted' WHERE a=0 AND b=0")
+        with source.read("records", columns, ["a", "b"], limit=10) as result:
+            assert result.fetchmany(1)[0][2] is None  # Original committed value; no row-lock wait.
+    finally:
+        root.rollback()
+    query(root, "SET SESSION lock_wait_timeout=1")
+    with source.read("records", columns, ["a", "b"], limit=10) as result:
+        # Local consumer has not fetched yet, but the source transaction is already finished.
+        query(root, "ALTER TABLE snapshot_source.records ADD COLUMN safety_probe INT NULL")
+        assert len(result.fetchall()) == 10
+
+
+def test_source_metadata_lock_wait_is_bounded(env, protected_source):
+    root = env[1]
+    query(root, "LOCK TABLES snapshot_source.records WRITE")
+    started = time.monotonic()
+    try:
+        with pytest.raises(pymysql.OperationalError) as error:
+            with protected_source.read("records", [{"name": "a"}], ["a"], limit=10):
+                pass
+        assert error.value.args[0] in (1205, 1969)
+        assert time.monotonic() - started < 5
+    finally:
+        query(root, "UNLOCK TABLES")
+
+
+def test_source_rejects_unindexed_plan_and_large_result(env, protected_source):
+    root, source = env[1], protected_source
+    with pytest.raises(ValueError, match="인덱스"):
+        with source.read("records", [{"name": "s"}], ["s"], limit=10):
+            pass
+    query(root, "UPDATE snapshot_source.records SET s=REPEAT('x', 1024*1024) WHERE a<2")
+    with pytest.raises(ValueError, match="상한"):
+        with source.read("records", [{"name": "a"}, {"name": "b"}, {"name": "s"}], ["a", "b"], limit=10):
+            pass
+    assert not source._conn.open
+
+
+def test_source_examined_limit_never_returns_partial_success(env, protected_source):
+    query(env[1], "INSERT INTO snapshot_source.no_key SELECT 'x' FROM snapshot_source.seq_1_to_3000")
+    # A generated query's examined-row ceiling can also be reached under concurrent churn.
+    with pytest.raises((ValueError, pymysql.OperationalError)):
+        with protected_source._select(
+            "SELECT s FROM no_key ORDER BY s LIMIT 1000 ROWS EXAMINED 10", streaming=True
+        ):
+            pytest.fail("Partial result must not reach a caller")
+
+
+def test_shared_instance_is_rejected_even_with_different_schema(env):
+    store, root, _, _, _ = env
+    target = next(p for p in store.profiles() if p["id"] == "t")
+    store.save("connection_profile", dict(target, port=root.port))
+    result = run(env)
+    assert result["state"] == "FAILED" and "같은 서버" in result["error"]
+    assert query(root, "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='snapshot_source'")
+    with root.cursor() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='snapshot_target'")
+        assert cursor.fetchone() == (0,)  # No writes on the source instance's target schema.
+
+
+def test_source_read_budget_stops_before_opening_connection(env):
+    class Expired(Engine):
+        def extract(self, *args):
+            self.source_deadline = time.monotonic() - 1
+            return super().extract(*args)
+
+    result = run(env, engine_cls=Expired)
+    assert result["state"] == "FAILED" and "10분 초과" in result["error"]

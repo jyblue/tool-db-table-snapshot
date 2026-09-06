@@ -10,3 +10,14 @@ services:
       interval: 2s
       timeout: 5s
       retries: 30
+  mariadb-target:
+    image: mariadb:11.4
+    ports:
+      - "127.0.0.1:33318:3306"
+    environment:
+      MARIADB_ROOT_PASSWORD: snapshot-test-only
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 2s
+      timeout: 5s
+      retries: 30

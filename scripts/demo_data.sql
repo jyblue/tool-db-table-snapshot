@@ -1,6 +1,5 @@
 -- Synthetic local demo only. Re-running inserts missing IDs; existing rows stay unchanged.
 CREATE DATABASE IF NOT EXISTS snapshot_source CHARACTER SET utf8mb4;
-CREATE DATABASE IF NOT EXISTS snapshot_target CHARACTER SET utf8mb4;
 USE snapshot_source;
 
 CREATE TABLE IF NOT EXISTS demo_customers (

@@ -336,32 +336,25 @@ elif page == STEPS[1]:
         name = st.text_input(
             "작업 이름 (선택)", j.get("name", ""), placeholder="공란이면 테이블 이름을 사용합니다"
         )
-        with st.expander("읽기 방식과 부하 조절 · 기본 1,000행 / 300ms"):
-            mode = st.selectbox(
-                "읽기 방식",
-                ["pk", "stream"],
-                index=0 if j.get("read_mode", "pk") == "pk" else 1,
-                format_func=lambda x: (
-                    "키 기준으로 나누어 읽기 (기본)"
-                    if x == "pk"
-                    else "한 번에 연결하여 조금씩 읽기 (키가 없을 때)"
-                ),
-            )
+        with st.expander("원본 보호와 부하 조절 · 최대 1,000행 / 최소 100ms"):
+            mode = "pk"
             st.caption(
-                "기본 방식은 PK 또는 NOT NULL 유일 키가 필요합니다. 키가 없다는 오류가 나면 두 번째 방식을 선택하세요."
+                "PK 또는 NOT NULL 유일 키로 나누어 읽습니다. 키 없는 테이블은 1,000행 이하 소량 테스트만 허용합니다."
             )
             cols = st.columns(2)
-            batch = cols[0].number_input("배치 행 수", 1, 100000, int(j.get("batch_rows", 1000)))
-            wait = cols[1].number_input("배치 사이 대기 (ms)", 0, 60000, int(j.get("wait_ms", 300)))
+            batch = cols[0].number_input("배치 행 수", 1, 1000, min(int(j.get("batch_rows", 1000)), 1000))
+            wait = cols[1].number_input(
+                "배치 사이 대기 (ms)", 100, 60000, max(int(j.get("wait_ms", 300)), 100)
+            )
             st.caption(
-                "나누어 읽을 때만 배치 사이에 대기합니다. 원본 데이터 갱신이 끝난 시간대에 실행하세요."
+                "원본 SQL 최대 2초, 잠금 대기 1초, 배치 결과 8MiB. 상한 초과 시 부분 결과를 버리고 중단합니다."
             )
         with st.expander("연결 제한 시간과 재시도"):
             cols = st.columns(4)
             ct = cols[0].number_input("연결 제한 (초)", 1, 86400, int(j.get("connect_timeout", 10)))
             rt = cols[1].number_input("읽기 제한 (초)", 1, 86400, int(j.get("read_timeout", 60)))
             wt = cols[2].number_input("쓰기 제한 (초)", 1, 86400, int(j.get("write_timeout", 60)))
-            retries = cols[3].number_input("통신 재시도 횟수", 0, 5, int(j.get("retries", 2)))
+            retries = cols[3].number_input("대상 통신 재시도 횟수", 0, 5, int(j.get("retries", 2)))
         save = st.form_submit_button("복사 작업 저장", type="primary", disabled=active)
     if save:
         try:
@@ -658,7 +651,7 @@ else:
             for j in spec["jobs"]:
                 st.caption(
                     f"{j['name']}: {j['batch_rows']:,}행 / {j['wait_ms']}ms · "
-                    + ("키 기준 배치" if j["read_mode"] == "pk" else "단일 스트리밍")
+                    + ("키 기준 배치" if j["read_mode"] == "pk" else "키 배치 / 키 없으면 소량 테스트만")
                 )
         with st.expander("상세 진단 · 속도, 연결, 생존 신호"):
             st.write("복사 프로세스: " + ("생존" if process.owned_process(r) else "종료 / 시작 대기"))

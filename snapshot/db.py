@@ -3,12 +3,16 @@ from __future__ import annotations
 import re
 import socket
 import ssl
+import time
 from contextlib import contextmanager
 
 import pymysql
 
 MARKER = "_snapshot_runs"
 PREFIX = "_snapshot_"
+SOURCE_MAX_ROWS = 1000
+SOURCE_MAX_BYTES = 8 * 1024 * 1024
+SOURCE_WAIT_SECONDS = 0.1
 
 
 VERSION_SQL = "SELECT VERSION()"
@@ -72,6 +76,9 @@ def connect(p, secret, settings=None, target=False):
         ssl=tls,
         ssl_disabled=not bool(tls),
     )
+    if not target:
+        for name in ("connect_timeout", "read_timeout", "write_timeout"):
+            options[name] = min(options[name], 5)
     # UTC gives TIMESTAMP values a stable representation on both connections.
     options["init_command"] = "SET SESSION time_zone='+00:00'"
     if target:
@@ -80,11 +87,20 @@ def connect(p, secret, settings=None, target=False):
     if not target:
         try:
             with conn.cursor() as cur:
+                cur.execute("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
                 cur.execute("SET SESSION TRANSACTION READ ONLY")
+                cur.execute(
+                    "SET SESSION max_statement_time=2, lock_wait_timeout=1, "
+                    "innodb_lock_wait_timeout=1, net_write_timeout=2, wait_timeout=30"
+                )
                 # tx_read_only also works on MariaDB versions before 11.1.
-                cur.execute("SELECT @@session.tx_read_only")
-                if cur.fetchone() != (1,):
-                    raise ValueError("Source 읽기 전용 설정 확인 실패")
+                cur.execute(
+                    "SELECT @@session.tx_read_only, @@session.tx_isolation, @@autocommit, "
+                    "@@max_statement_time, @@lock_wait_timeout, @@innodb_lock_wait_timeout, "
+                    "@@net_write_timeout, @@wait_timeout"
+                )
+                if cur.fetchone() != (1, "READ-COMMITTED", 1, 2, 1, 1, 2, 30):
+                    raise ValueError("Source 보호 설정 확인 실패")
         except BaseException:
             conn.close()
             raise
@@ -94,14 +110,17 @@ def connect(p, secret, settings=None, target=False):
 class ReadResult:
     """Expose fetching only, never cursor.execute or its connection."""
 
-    def __init__(self, cursor):
-        self.__cursor = cursor
+    def __init__(self, rows):
+        self.__rows = rows
+        self.__position = 0
 
     def fetchmany(self, size):
-        return self.__cursor.fetchmany(size)
+        result = self.__rows[self.__position : self.__position + size]
+        self.__position += len(result)
+        return result
 
     def fetchall(self):
-        return self.__cursor.fetchall()
+        return self.fetchmany(len(self.__rows))
 
 
 class Source:
@@ -110,6 +129,16 @@ class Source:
     def __init__(self, profile, secret, settings=None):
         self._conn = connect(profile, secret, settings)
         self.database = profile["database"]
+        self._next_read = 0
+        try:
+            # Non-blocking application mutex, not a table/row lock. Released on close.
+            with self._conn.cursor() as cur:
+                cur.execute("SELECT GET_LOCK('_snapshot_source_reader', 0)")
+                if cur.fetchone() != (1,):
+                    raise ValueError("같은 원본 서버에서 다른 스냅샷 조회가 진행 중입니다.")
+        except BaseException:
+            self.close()
+            raise
 
     @contextmanager
     def _select(self, sql, args=(), streaming=False):
@@ -117,7 +146,18 @@ class Source:
         cur = self._conn.cursor(cls)
         try:
             cur.execute(sql, args)
-            yield ReadResult(cur)
+            # Finish the bounded server read BEFORE local file writes or caller pauses.
+            data, size = [], 0
+            while row := cur.fetchone():
+                size += sum(len(v) if isinstance(v, (bytes, str)) else 32 for v in row if v is not None)
+                if isinstance(row, tuple):
+                    size += sum(len(v.encode("utf-8")) - len(v) for v in row if isinstance(v, str))
+                if size > SOURCE_MAX_BYTES or len(data) >= SOURCE_MAX_ROWS:
+                    raise ValueError("Source 조회 결과 상한 초과 (1,000행 / 8MiB). 배치 크기를 줄이세요.")
+                data.append(row)
+            if cur.warning_count:
+                raise ValueError("Source 조회 경고: 부분 결과를 사용하지 않습니다.")
+            yield ReadResult(data)
         except BaseException:
             if streaming:
                 self.close()
@@ -135,13 +175,31 @@ class Source:
         with self._select(sql, args) as result:
             return result.fetchall()
 
+    @contextmanager
     def read(self, table, columns, key=(), last=None, limit=None):
+        if type(limit) is not int or not 1 <= limit <= SOURCE_MAX_ROWS:
+            raise ValueError("Source 조회는 최대 1,000행의 유한 배치만 허용합니다.")
         sql, args = read_sql(table, columns, key, last, limit)
-        return self._select(sql, args, streaming=True)
-
-    def probe(self, table):
-        with self._select(f"SELECT * FROM {ident(table)} LIMIT 0"):
-            pass
+        time.sleep(max(0, self._next_read - time.monotonic()))
+        started = time.monotonic()
+        try:
+            if key:
+                with self._select("EXPLAIN " + sql, args) as result:
+                    for plan in result.fetchall():
+                        if (
+                            plan[3] not in ("const", "ref", "range", "index")
+                            or not plan[5]
+                            or any(flag in (plan[-1] or "") for flag in ("filesort", "temporary"))
+                        ):
+                            raise ValueError(
+                                "Source 인덱스 조회 계획이 아닙니다. 전체 스캔/정렬을 차단합니다."
+                            )
+            with self._select(sql + " ROWS EXAMINED 2000", args, streaming=True) as result:
+                elapsed = time.monotonic() - started
+                self._next_read = time.monotonic() + max(SOURCE_WAIT_SECONDS, elapsed * 4)
+                yield result
+        finally:
+            self._next_read = max(self._next_read, time.monotonic() + SOURCE_WAIT_SECONDS)
 
     def close(self):
         if self._conn.open:
@@ -185,21 +243,31 @@ def identity(query):
 
 
 def assert_distinct(source_profile, target_profile, source_identity, target_identity):
-    if source_profile["database"].casefold() != target_profile["database"].casefold():
-        return
     if source_identity == target_identity or (source_identity[0], source_identity[1], source_identity[3]) == (
         target_identity[0],
         target_identity[1],
         target_identity[3],
     ):
-        raise ValueError("Source와 Target이 같은 서버/schema를 가리킵니다.")
+        raise ValueError(
+            "Source와 Target이 같은 서버를 가리킵니다. 원본 보호를 위해 별도 MariaDB 인스턴스를 사용하세요."
+        )
     try:
         a = {r[4][0] for r in socket.getaddrinfo(source_profile["host"], None)}
         b = {r[4][0] for r in socket.getaddrinfo(target_profile["host"], None)}
         if a & b and int(source_profile["port"]) == int(target_profile["port"]):
-            raise ValueError("Source와 Target의 IP/포트/schema가 같습니다.")
+            raise ValueError("Source와 Target이 같은 서버(IP/포트)를 가리킵니다.")
     except socket.gaierror:
         pass
+
+
+def check_target_isolation(conn, profile, source_profiles, get_secret):
+    target_identity = identity(lambda sql: rows(conn, sql))
+    for source_profile in source_profiles:
+        src = Source(source_profile, get_secret(source_profile))
+        try:
+            assert_distinct(source_profile, profile, identity(src.rows), target_identity)
+        finally:
+            src.close()
 
 
 def tables(source):
@@ -391,7 +459,9 @@ def read_sql(table, columns, key, last, limit):
     ):
         raise ValueError("읽기 설정 오류")
     where, args = keyset(key, last)
-    sql = "SELECT " + ",".join(ident(c["name"]) for c in columns) + f" FROM {ident(table)}" + where
+    sql = (
+        "SELECT SQL_NO_CACHE " + ",".join(ident(c["name"]) for c in columns) + f" FROM {ident(table)}" + where
+    )
     if key:
         sql += " ORDER BY " + ",".join(ident(k) for k in key)
     if limit is not None:
@@ -406,17 +476,13 @@ def test_connection(profile, secret, source_profiles=(), get_secret=None):
         try:
             version = src.rows(VERSION_SQL)[0][0]
             names = tables(src)
-            for name in names:
-                src.probe(name)
-            return f"{version} · 읽기 확인 {len(names)}개 테이블", names
+            return f"{version} · 읽기 전용 연결 / 테이블 목록 {len(names)}개 확인", names
         finally:
             src.close()
     conn = connect(profile, secret, target=True)
     try:
         target_identity = identity(lambda sql: rows(conn, sql))
         for source_profile in source_profiles:
-            if source_profile["database"].casefold() != profile["database"].casefold():
-                continue
             src = Source(source_profile, get_secret(source_profile))
             try:
                 assert_distinct(source_profile, profile, identity(src.rows), target_identity)

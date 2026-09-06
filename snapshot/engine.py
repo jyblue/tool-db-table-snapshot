@@ -129,6 +129,12 @@ def reconcile(store, run_id, secrets):
     profile = spec["profiles"][spec["jobs"][0]["target_id"]]
     conn = db.connect(profile, password(profile, secrets), spec["jobs"][0], target=True)
     try:
+        db.check_target_isolation(
+            conn,
+            profile,
+            [p for p in spec["profiles"].values() if p["role"] == "source"],
+            lambda p: password(p, secrets),
+        )
         acquire_lock(conn, profile["database"])
         result = db.rows(
             conn, f"SELECT snapshot_date,tables_json FROM {db.ident(db.MARKER)} WHERE run_id=%s", (run_id,)
@@ -166,6 +172,7 @@ class Engine:
         self.current = None
         self.stage_names = []
         self.done_files = []
+        self.source_deadline = None
         self.pending_progress = {}
         self.last_progress_write = 0
         self.directory = Path(self.spec["work_dir"]) / run_id
@@ -233,31 +240,49 @@ class Engine:
     def target(self):
         job = self.spec["jobs"][0]
         p = self.spec["profiles"][job["target_id"]]
-        return db.connect(p, password(p, self.secrets), job, target=True)
+        conn = db.connect(p, password(p, self.secrets), job, target=True)
+        try:
+            db.check_target_isolation(
+                conn,
+                p,
+                [p for p in self.spec["profiles"].values() if p["role"] == "source"],
+                lambda p: password(p, self.secrets),
+            )
+            return conn
+        except BaseException:
+            conn.close()
+            raise
 
     def extract(self, job, schema, path):
-        src = self.source(job)
-        self.store.update_run(self.run_id, server_status="Source 읽기 연결됨 / Target 연결됨")
+        if self.source_deadline is None:
+            self.source_deadline = time.monotonic() + 600
+        if time.monotonic() >= self.source_deadline:
+            raise ValueError("원본 추출 시간 예산 10분 초과. 별도 복제본을 사용하세요.")
         writer = codec.Writer(path)
-        self.update(
-            stage="EXTRACTING",
-            extracted=0,
-            bytes=0,
-            read_started=time.time(),
-            read_ended=None,
-            connection_status="Source 연결됨",
-        )
+        src = None
         try:
+            src = self.source(job)
+            self.store.update_run(self.run_id, server_status="Source 읽기 연결됨 / Target 연결됨")
+            self.update(
+                stage="EXTRACTING",
+                extracted=0,
+                bytes=0,
+                read_started=time.time(),
+                read_ended=None,
+                connection_status="Source 연결됨",
+            )
             # Detect changes since preflight before issuing the data query.
             if db.schema(src.rows, src.database, job["source_table"]) != schema:
                 raise ValueError("추출 전 원본 스키마 변경 감지")
             columns, key = schema["columns"], schema["key"]
-            if job["read_mode"] == "pk":
+            if key:
                 last = None
                 positions = [next(i for i, c in enumerate(columns) if c["name"] == k) for k in key]
                 while self.spec["limit"] is None or writer.rows < self.spec["limit"]:
                     self.check(force=True)
-                    count = job["batch_rows"]
+                    if time.monotonic() >= self.source_deadline:
+                        raise ValueError("원본 추출 시간 예산 10분 초과. 별도 복제본을 사용하세요.")
+                    count = min(job["batch_rows"], db.SOURCE_MAX_ROWS)
                     if self.spec["limit"] is not None:
                         count = min(count, self.spec["limit"] - writer.rows)
                     # Autocommit SELECT fully consumed/closed before waiting.
@@ -275,12 +300,16 @@ class Engine:
                     if received < count or (self.spec["limit"] and writer.rows >= self.spec["limit"]):
                         break
                     check_disk(self.directory)
-                    if job["wait_ms"]:
-                        self.update(stage="SLEEPING")
-                        self.pause(job["wait_ms"] / 1000)
-                        self.update(stage="EXTRACTING")
+                    self.update(stage="SLEEPING")
+                    self.pause(max(job["wait_ms"] / 1000, db.SOURCE_WAIT_SECONDS))
+                    if job["wait_ms"] >= 25000:
+                        src.close()
+                        src = self.source(job)
+                    self.update(stage="EXTRACTING")
             else:
-                with src.read(job["source_table"], columns, key, limit=self.spec["limit"]) as cur:
+                with src.read(
+                    job["source_table"], columns, key, limit=min(self.spec["limit"], db.SOURCE_MAX_ROWS)
+                ) as cur:
                     try:
                         while True:
                             self.check(force=True)
@@ -300,11 +329,13 @@ class Engine:
             self.update(file=str(path), extracted=writer.rows, bytes=writer.size)
             return result
         except BaseException:
-            src.close()
+            if src:
+                src.close()
             raise
         finally:
             writer.close()
-            src.close()
+            if src:
+                src.close()
             self.update(connection_status="Source 닫힘", read_ended=time.time())
             self.store.update_run(self.run_id, server_status="Source 닫힘 / Target 연결됨")
 
@@ -383,9 +414,12 @@ class Engine:
                     )
                     sch = db.schema(src.rows, src.database, job["source_table"])
                     exp = db.expected_schema(sch)
-                    if job["read_mode"] == "pk" and not sch["key"]:
+                    if not sch["key"] and (
+                        self.spec["limit"] is None or self.spec["limit"] > db.SOURCE_MAX_ROWS
+                    ):
                         raise ValueError(
-                            f"{job['source_table']}: 적합한 키가 없어 단일 스트리밍 모드를 선택해야 합니다."
+                            f"{job['source_table']}: 키 없는 전체 읽기는 원본 보호를 위해 차단합니다. "
+                            "1,000행 이하 테스트 또는 별도 복제본을 사용하세요."
                         )
                     schemas.append((sch, exp))
                 finally:
@@ -424,7 +458,7 @@ class Engine:
                         self.log("INFO", "검증된 완료 파일 재사용", job["source_table"])
                         reused = True
                 if not reused:
-                    manifest = self.retry(lambda: self.extract(job, sch, path), job)
+                    manifest = self.extract(job, sch, path)
                 codec.verify(path, self.file_metadata(job, sch, path.parent.name), self.check)
                 self.done_files.append(path)
                 self.retry(lambda: self.load(job, expected, path, manifest, stage), job)

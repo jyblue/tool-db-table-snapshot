@@ -134,6 +134,12 @@ def cleanup(store, run_id, ephemeral):
     profile = spec["profiles"][spec["jobs"][0]["target_id"]]
     conn = db.connect(profile, password(profile, ephemeral), spec["jobs"][0], target=True)
     try:
+        db.check_target_isolation(
+            conn,
+            profile,
+            [p for p in spec["profiles"].values() if p["role"] == "source"],
+            lambda p: password(p, ephemeral),
+        )
         with conn.cursor() as cur:
             for item in store.tables(run_id):
                 expected = f"_snapshot_s_{run_id}_{item['ordinal']}"

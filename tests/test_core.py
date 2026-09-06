@@ -188,9 +188,22 @@ def test_source_initialization_fails_closed(monkeypatch, failure):
     if failure == "set":
         cursor.execute.side_effect = RuntimeError("setup failed")
     elif failure == "verify":
-        cursor.execute.side_effect = [None, RuntimeError("verification failed")]
+
+        def execute(sql):
+            if sql.startswith("SELECT"):
+                raise RuntimeError("verification failed")
+
+        cursor.execute.side_effect = execute
     monkeypatch.setattr(db.pymysql, "connect", lambda **options: conn)
     profile = dict(role="source", name="test", host="localhost", port=3306, database="test", user="test")
     with pytest.raises((RuntimeError, ValueError)):
         db.Source(profile, "unused")
     conn.close.assert_called_once()
+
+
+@pytest.mark.parametrize("limit", [None, 0, 1001, True])
+def test_source_rejects_unbounded_reads_before_connecting(limit):
+    source = object.__new__(db.Source)
+    with pytest.raises(ValueError, match="유한 배치"):
+        with source.read("records", [{"name": "id"}], ["id"], limit=limit):
+            pass
