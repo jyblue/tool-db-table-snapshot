@@ -131,7 +131,8 @@ def test_round_trip_dates_replacement_and_readonly(env):
     assert copied == original
     assert run(env, date="2026-09-07")["state"] == "SUCCESS"
     query(root, "DELETE FROM snapshot_source.records WHERE a=0")
-    assert run(env)["state"] == "SUCCESS"
+    result = run(env)
+    assert result["state"] == "SUCCESS", result["error"]
     assert query(
         root, "SELECT snapshot_date,COUNT(*) FROM snapshot_target.records GROUP BY snapshot_date"
     ) == ((dt.date(2026, 9, 6), 1200), (dt.date(2026, 9, 7), 1205))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 import socket
 import ssl
@@ -133,7 +134,8 @@ class Source:
         try:
             # Non-blocking application mutex, not a table/row lock. Released on close.
             with self._conn.cursor() as cur:
-                cur.execute("SELECT GET_LOCK('_snapshot_source_reader', 0)")
+                lock_name = "_snapshot_source_reader_" + hashlib.sha256(self.database.encode()).hexdigest()[:48]
+                cur.execute("SELECT GET_LOCK(%s, 0)", (lock_name,))
                 if cur.fetchone() != (1,):
                     raise ValueError("같은 원본 서버에서 다른 스냅샷 조회가 진행 중입니다.")
         except BaseException:
