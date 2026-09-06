@@ -517,3 +517,65 @@ def test_privileged_source_is_read_only_on_every_connection(env):
     result = run(env)
     assert result["state"] == "SUCCESS", result["error"]
     assert query(root, "SELECT COUNT(*) FROM snapshot_source.records") == ((1205,),)
+
+
+def test_target_row_lock_timeout_rolls_back_entire_publication(env):
+    store, root, job, _, _ = env
+    store.save("backup_job", dict(job, id="second", target_table="records_second"))
+    assert run(env, ["j", "second"])["state"] == "SUCCESS"
+    query(root, "DELETE FROM snapshot_source.records WHERE a=0")
+
+    class ShortLockWait(Engine):
+        def target(self):
+            conn = super().target()
+            # Test-only bound; production currently inherits the server default.
+            query(conn, "SET SESSION innodb_lock_wait_timeout=1")
+            return conn
+
+    root.begin()
+    try:
+        query(root, "SELECT * FROM snapshot_target.records_second WHERE a=0 FOR UPDATE")
+        result = run(env, ["j", "second"], engine_cls=ShortLockWait)
+    finally:
+        root.rollback()
+    assert result["state"] == "INTERRUPTED" and not result["publish_pending"]
+    assert "1205" in result["error"]
+    for table in ("records", "records_second"):
+        assert query(root, f"SELECT COUNT(*) FROM snapshot_target.{table}") == ((1205,),)
+    assert query(root, "SELECT COUNT(*) FROM snapshot_target._snapshot_runs") == ((1,),)
+
+
+def test_target_without_date_index_is_currently_accepted(env):
+    # Characterization of an open load risk, not an assertion that this is safe.
+    store, root, job, _, _ = env
+    store.save("backup_job", dict(job, source_table="no_key", target_table="no_key", read_mode="stream"))
+    assert run(env)["state"] == "SUCCESS"
+    query(root, "ALTER TABLE snapshot_target.no_key DROP INDEX snapshot_date_idx")
+    assert run(env)["state"] == "SUCCESS"  # Missing non-unique index is not checked yet.
+    with root.cursor(pymysql.cursors.DictCursor) as cursor:
+        cursor.execute("EXPLAIN DELETE FROM snapshot_target.no_key WHERE snapshot_date='2026-09-06'")
+        plan = cursor.fetchone()
+    assert plan["type"] == "ALL" and plan["key"] is None
+
+
+def test_target_load_batches_but_publication_is_one_statement(env, monkeypatch):
+    store, _, job, _, _ = env
+    store.save("backup_job", dict(job, batch_rows=100000))
+    batches, publications = [], []
+    original_many = db.StrictCursor.executemany
+    original_execute = pymysql.cursors.Cursor.execute
+
+    def many(self, sql, args):
+        batches.append(len(args))
+        return original_many(self, sql, args)
+
+    def execute(self, sql, args=None):
+        if isinstance(sql, str) and sql.startswith("INSERT INTO `records` SELECT"):
+            publications.append(sql)
+        return original_execute(self, sql, args)
+
+    monkeypatch.setattr(db.StrictCursor, "executemany", many)
+    monkeypatch.setattr(pymysql.cursors.Cursor, "execute", execute)
+    assert run(env)["state"] == "SUCCESS"
+    assert batches == [1000, 205]
+    assert len(publications) == 1  # Publication does not inherit the load batch limit.
