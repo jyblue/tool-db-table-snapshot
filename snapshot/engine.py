@@ -260,9 +260,8 @@ class Engine:
                     count = job["batch_rows"]
                     if self.spec["limit"] is not None:
                         count = min(count, self.spec["limit"] - writer.rows)
-                    sql, args = db.read_sql(job["source_table"], columns, key, last, count)
                     # Autocommit SELECT fully consumed/closed before waiting.
-                    with src.select(sql, args, streaming=True) as cur:
+                    with src.read(job["source_table"], columns, key, last, count) as cur:
                         received = 0
                         while True:
                             self.check()
@@ -281,15 +280,7 @@ class Engine:
                         self.pause(job["wait_ms"] / 1000)
                         self.update(stage="EXTRACTING")
             else:
-                names = ",".join(db.ident(c["name"]) for c in columns)
-                sql = f"SELECT {names} FROM {db.ident(job['source_table'])}"
-                if key:
-                    sql += " ORDER BY " + ",".join(db.ident(k) for k in key)
-                args = ()
-                if self.spec["limit"] is not None:
-                    sql += " LIMIT %s"
-                    args = (self.spec["limit"],)
-                with src.select(sql, args, streaming=True) as cur:
+                with src.read(job["source_table"], columns, key, limit=self.spec["limit"]) as cur:
                     try:
                         while True:
                             self.check(force=True)

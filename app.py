@@ -133,7 +133,7 @@ if page == STEPS[0]:
     c1.info(
         "① 원본 DB · "
         + (f"{len(sources)}개 등록됨" if sources else "등록 필요")
-        + "\n\n읽기 전용 계정을 사용합니다."
+        + "\n\n연결마다 읽기 전용 모드를 강제합니다. 전용 읽기 계정을 권장합니다."
     )
     c2.info(
         "② 대상 DB · "

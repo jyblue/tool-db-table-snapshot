@@ -55,8 +55,8 @@ def test_composite_keyset_and_identifier():
 
 def test_source_rejects_write_without_connection():
     src = object.__new__(db.Source)
-    with pytest.raises(ValueError, match="SELECT"), src.select("DELETE FROM x"):
-        pass
+    with pytest.raises(ValueError, match="SELECT"):
+        src.rows("DELETE FROM x")
 
 
 def test_duplicate_start_is_atomic_and_pending_blocks(tmp_path):
@@ -148,3 +148,49 @@ def test_recovery_cannot_overwrite_success_or_new_worker(tmp_path):
 def test_negative_time_binding():
     assert db.bind_value(dt.timedelta(hours=-30, microseconds=1)) == "-29:59:59.999999"
     assert db.bind_value(dt.timedelta(hours=30, microseconds=1)) == "30:00:00.000001"
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "DELETE FROM records",
+        "UPDATE records SET a=0",
+        "TRUNCATE records",
+        "DROP TABLE records",
+        "INSERT INTO records VALUES (1)",
+        "ALTER TABLE records ADD x INT",
+        "CALL dangerous()",
+        "SET SESSION TRANSACTION READ WRITE",
+        "START TRANSACTION READ WRITE",
+        "SELECT 1",
+        "SELECT VERSION(); DROP TABLE records",
+        "SELECT * FROM records INTO OUTFILE '/tmp/export'",
+        "SELECT * FROM records FOR UPDATE",
+        "SELECT * FROM records LOCK IN SHARE MODE",
+        "SELECT dangerous()",
+        "SELECT SLEEP(10)",
+        "SELECT VERSION() /* extra */",
+    ],
+)
+def test_source_accepts_only_fixed_metadata_templates(sql):
+    source = object.__new__(db.Source)
+    with pytest.raises(ValueError, match="템플릿"):
+        source.rows(sql)
+
+
+@pytest.mark.parametrize("failure", ["set", "verify", "disabled"])
+def test_source_initialization_fails_closed(monkeypatch, failure):
+    from unittest.mock import MagicMock
+
+    conn = MagicMock()
+    cursor = conn.cursor.return_value.__enter__.return_value
+    cursor.fetchone.return_value = (0,)
+    if failure == "set":
+        cursor.execute.side_effect = RuntimeError("setup failed")
+    elif failure == "verify":
+        cursor.execute.side_effect = [None, RuntimeError("verification failed")]
+    monkeypatch.setattr(db.pymysql, "connect", lambda **options: conn)
+    profile = dict(role="source", name="test", host="localhost", port=3306, database="test", user="test")
+    with pytest.raises((RuntimeError, ValueError)):
+        db.Source(profile, "unused")
+    conn.close.assert_called_once()

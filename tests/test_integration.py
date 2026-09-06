@@ -340,14 +340,14 @@ def test_twenty_tables_one_source_connection(env, monkeypatch):
 def test_extract_disconnect_restarts_from_beginning(env, monkeypatch):
     from contextlib import contextmanager
 
-    original = db.Source.select
+    original = db.Source.read
     failed = False
 
     @contextmanager
-    def select(self, sql, args=(), streaming=False):
+    def read(self, *args, **kwargs):
         nonlocal failed
-        with original(self, sql, args, streaming) as cursor:
-            if streaming and not failed:
+        with original(self, *args, **kwargs) as cursor:
+            if not failed:
                 original_fetch = cursor.fetchmany
                 calls = 0
 
@@ -364,7 +364,7 @@ def test_extract_disconnect_restarts_from_beginning(env, monkeypatch):
 
     s, root, j, _, _ = env
     s.save("backup_job", dict(j, retries=1))
-    monkeypatch.setattr(db.Source, "select", select)
+    monkeypatch.setattr(db.Source, "read", read)
     result = run(env)
     assert result["state"] == "SUCCESS", result["error"]
     assert failed
@@ -484,3 +484,36 @@ def test_target_connection_test_checks_source_alias_first(env):
     target = dict(profiles["t"], database=profiles["s"]["database"])
     with pytest.raises(ValueError, match="같은 서버"):
         db.test_connection(target, env[3]["t"], [profiles["s"]], lambda p: env[3][p["id"]])
+
+
+def test_privileged_source_is_read_only_on_every_connection(env):
+    store, root, _, secrets, _ = env
+    profile = dict(next(p for p in store.profiles() if p["id"] == "s"), user="root")
+    store.save("connection_profile", profile)
+    secrets["s"] = "snapshot-test-only"
+    writes = [
+        "DELETE FROM records",
+        "UPDATE records SET s='changed'",
+        "TRUNCATE TABLE records",
+        "DROP TABLE records",
+        "INSERT INTO empty VALUES (1)",
+        "ALTER TABLE empty ADD n INT",
+        "CREATE TABLE forbidden (id INT)",
+    ]
+    # Bypass the app guard deliberately to verify MariaDB's second layer, including DDL.
+    for _ in range(2):
+        source = db.Source(profile, secrets["s"])
+        try:
+            assert query(source._conn, "SELECT @@session.tx_read_only") == ((1,),)
+            for sql in writes:
+                with pytest.raises(pymysql.OperationalError) as error:
+                    query(source._conn, sql)
+                assert error.value.args[0] == 1792
+            with source.read("records", [{"name": "a"}], limit=1) as result:
+                assert result.fetchmany(1) == [(0,)]
+                assert not hasattr(result, "execute") and not hasattr(result, "connection")
+        finally:
+            source.close()
+    result = run(env)
+    assert result["state"] == "SUCCESS", result["error"]
+    assert query(root, "SELECT COUNT(*) FROM snapshot_source.records") == ((1205,),)

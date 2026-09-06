@@ -11,6 +11,24 @@ MARKER = "_snapshot_runs"
 PREFIX = "_snapshot_"
 
 
+VERSION_SQL = "SELECT VERSION()"
+IDENTITY_SQL = "SELECT @@hostname, @@port, @@server_id, @@datadir"
+TABLES_SQL = "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s AND TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME"
+ENGINE_SQL = "SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s"
+COLUMNS_SQL = "SELECT COLUMN_NAME,COLUMN_TYPE,IS_NULLABLE,CHARACTER_SET_NAME,COLLATION_NAME,EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s ORDER BY ORDINAL_POSITION"
+INDEXES_SQL = "SELECT INDEX_NAME,NON_UNIQUE,SEQ_IN_INDEX,COLUMN_NAME,SUB_PART FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s ORDER BY INDEX_NAME,SEQ_IN_INDEX"
+SOURCE_QUERIES = frozenset(
+    (
+        VERSION_SQL,
+        IDENTITY_SQL,
+        TABLES_SQL,
+        ENGINE_SQL,
+        COLUMNS_SQL,
+        INDEXES_SQL,
+    )
+)
+
+
 def ident(name):
     if not isinstance(name, str) or not name or len(name) > 64 or "\x00" in name:
         raise ValueError("유효하지 않은 SQL 식별자 (1~64자)")
@@ -58,7 +76,32 @@ def connect(p, secret, settings=None, target=False):
     options["init_command"] = "SET SESSION time_zone='+00:00'"
     if target:
         options["sql_mode"] = "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION,NO_AUTO_VALUE_ON_ZERO"
-    return pymysql.connect(**options)
+    conn = pymysql.connect(**options)
+    if not target:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SET SESSION TRANSACTION READ ONLY")
+                # tx_read_only also works on MariaDB versions before 11.1.
+                cur.execute("SELECT @@session.tx_read_only")
+                if cur.fetchone() != (1,):
+                    raise ValueError("Source 읽기 전용 설정 확인 실패")
+        except BaseException:
+            conn.close()
+            raise
+    return conn
+
+
+class ReadResult:
+    """Expose fetching only, never cursor.execute or its connection."""
+
+    def __init__(self, cursor):
+        self.__cursor = cursor
+
+    def fetchmany(self, size):
+        return self.__cursor.fetchmany(size)
+
+    def fetchall(self):
+        return self.__cursor.fetchall()
 
 
 class Source:
@@ -69,14 +112,12 @@ class Source:
         self.database = profile["database"]
 
     @contextmanager
-    def select(self, sql, args=(), streaming=False):
-        if not sql.lstrip().upper().startswith("SELECT ") or ";" in sql:
-            raise ValueError("Source 경로는 SELECT만 허용합니다.")
+    def _select(self, sql, args=(), streaming=False):
         cls = pymysql.cursors.SSCursor if streaming else pymysql.cursors.Cursor
         cur = self._conn.cursor(cls)
         try:
             cur.execute(sql, args)
-            yield cur
+            yield ReadResult(cur)
         except BaseException:
             if streaming:
                 self.close()
@@ -89,8 +130,18 @@ class Source:
                 cur.close()
 
     def rows(self, sql, args=()):
-        with self.select(sql, args) as cur:
-            return cur.fetchall()
+        if sql not in SOURCE_QUERIES:
+            raise ValueError("Source는 지정된 SELECT 템플릿만 허용합니다.")
+        with self._select(sql, args) as result:
+            return result.fetchall()
+
+    def read(self, table, columns, key=(), last=None, limit=None):
+        sql, args = read_sql(table, columns, key, last, limit)
+        return self._select(sql, args, streaming=True)
+
+    def probe(self, table):
+        with self._select(f"SELECT * FROM {ident(table)} LIMIT 0"):
+            pass
 
     def close(self):
         if self._conn.open:
@@ -130,7 +181,7 @@ class StrictCursor(pymysql.cursors.Cursor):
 
 
 def identity(query):
-    return tuple(query("SELECT @@hostname, @@port, @@server_id, @@datadir")[0])
+    return tuple(query(IDENTITY_SQL)[0])
 
 
 def assert_distinct(source_profile, target_profile, source_identity, target_identity):
@@ -155,7 +206,7 @@ def tables(source):
     return [
         r[0]
         for r in source.rows(
-            "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s AND TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME",
+            TABLES_SQL,
             (source.database,),
         )
     ]
@@ -164,7 +215,7 @@ def tables(source):
 def schema(query, database, table):
     ident(table)
     engine = query(
-        "SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s",
+        ENGINE_SQL,
         (database, table),
     )
     if not engine:
@@ -172,11 +223,11 @@ def schema(query, database, table):
     if engine[0][0] != "InnoDB":
         raise ValueError(f"{table}: InnoDB만 지원합니다.")
     cols = query(
-        "SELECT COLUMN_NAME,COLUMN_TYPE,IS_NULLABLE,CHARACTER_SET_NAME,COLLATION_NAME,EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s ORDER BY ORDINAL_POSITION",
+        COLUMNS_SQL,
         (database, table),
     )
     indices = query(
-        "SELECT INDEX_NAME,NON_UNIQUE,SEQ_IN_INDEX,COLUMN_NAME,SUB_PART FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s ORDER BY INDEX_NAME,SEQ_IN_INDEX",
+        INDEXES_SQL,
         (database, table),
     )
     columns = [dict(zip(("name", "type", "nullable", "charset", "collation", "extra"), r)) for r in cols]
@@ -333,24 +384,30 @@ def keyset(key, last):
 
 def read_sql(table, columns, key, last, limit):
     allowed = {c["name"] for c in columns}
-    if not set(key) <= allowed or not isinstance(limit, int) or limit < 1:
+    if (
+        not columns
+        or not set(key) <= allowed
+        or (limit is not None and (type(limit) is not int or limit < 1))
+    ):
         raise ValueError("읽기 설정 오류")
     where, args = keyset(key, last)
     sql = "SELECT " + ",".join(ident(c["name"]) for c in columns) + f" FROM {ident(table)}" + where
     if key:
         sql += " ORDER BY " + ",".join(ident(k) for k in key)
-    sql += " LIMIT %s"
-    return sql, [*args, limit]
+    if limit is not None:
+        sql += " LIMIT %s"
+        args.append(limit)
+    return sql, args
 
 
 def test_connection(profile, secret, source_profiles=(), get_secret=None):
     if profile["role"] == "source":
         src = Source(profile, secret)
         try:
-            version = src.rows("SELECT VERSION()")[0][0]
+            version = src.rows(VERSION_SQL)[0][0]
             names = tables(src)
             for name in names:
-                src.rows(f"SELECT * FROM {ident(name)} LIMIT 0")
+                src.probe(name)
             return f"{version} · 읽기 확인 {len(names)}개 테이블", names
         finally:
             src.close()
@@ -365,7 +422,7 @@ def test_connection(profile, secret, source_profiles=(), get_secret=None):
                 assert_distinct(source_profile, profile, identity(src.rows), target_identity)
             finally:
                 src.close()
-        version = rows(conn, "SELECT VERSION()")[0][0]
+        version = rows(conn, VERSION_SQL)[0][0]
         # TEMPORARY objects cannot overwrite persistent source or target tables.
         with conn.cursor() as cur:
             cur.execute("CREATE TEMPORARY TABLE `_snapshot_permission_test` (n INT) ENGINE=InnoDB")
