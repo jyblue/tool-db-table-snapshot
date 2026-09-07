@@ -41,6 +41,38 @@ runs = store.runs()
 sources = [p for p in profiles if profiles[p]["role"] == "source"]
 targets = [p for p in profiles if profiles[p]["role"] == "target"]
 active = any(r["state"] in ACTIVE or r["publish_pending"] for r in runs)
+PENDING_CONFIRMATION = "_pending_confirmation"
+CONFIRMED_ACTION = "_confirmed_action"
+
+
+@st.dialog("실행 전 확인")
+def confirmation_dialog(pending):
+    st.subheader(pending["title"])
+    st.info(pending["message"])
+    st.caption("예상되는 동작과 결과를 확인한 뒤 계속하세요.")
+    confirm, cancel = st.columns(2)
+    if confirm.button("확인하고 계속", type="primary", key="confirm_action"):
+        st.session_state[CONFIRMED_ACTION] = pending["action"]
+        st.session_state.pop(PENDING_CONFIRMATION, None)
+        st.rerun()
+    if cancel.button("취소", key="cancel_action"):
+        st.session_state.pop(PENDING_CONFIRMATION, None)
+        st.rerun()
+
+
+def confirm_button(action, label_text, title, message, container=None, **button_kwargs):
+    if st.session_state.get(CONFIRMED_ACTION) == action:
+        st.session_state.pop(CONFIRMED_ACTION)
+        return True
+    button_area = container if container is not None else st
+    if button_area.button(label_text, **button_kwargs):
+        st.session_state[PENDING_CONFIRMATION] = {
+            "action": action,
+            "title": title,
+            "message": message,
+        }
+        st.rerun()
+    return False
 
 
 def go(step, message=None):
@@ -105,6 +137,8 @@ def mapping(selected, current_profiles=profiles):
 if "_next_step" in st.session_state:
     st.session_state["workflow_step"] = st.session_state.pop("_next_step")
 st.session_state.setdefault("workflow_step", initial_step(profiles, jobs, runs))
+if pending := st.session_state.get(PENDING_CONFIRMATION):
+    confirmation_dialog(pending)
 st.sidebar.title("스냅샷 만들기")
 page = st.sidebar.radio("진행 순서 및 조회", NAVIGATION, key="workflow_step")
 st.sidebar.caption(f"원본 {len(sources)}개 · 대상 {len(targets)}개 · 복사 작업 {len(jobs)}개")
@@ -118,7 +152,12 @@ with st.sidebar.expander("비밀번호 관리"):
         val = st.text_input(p["name"], type="password", key="replace_secret_" + pid)
         if val:
             secrets[pid] = val
-    if st.button("세션 비밀번호 지우기"):
+    if confirm_button(
+        "clear_session_passwords",
+        "세션 비밀번호 지우기",
+        "세션 비밀번호를 지울까요?",
+        "현재 브라우저 세션에 임시 보관한 비밀번호를 모두 지웁니다. DB 설정과 DB 데이터에는 영향을 주지 않습니다.",
+    ):
         secrets.clear()
         for key in list(st.session_state):
             if key.startswith(("replace_secret_", "credential_")):
@@ -254,7 +293,13 @@ if page == STEPS[0]:
                 go(1)
         with st.expander("이 연결 삭제"):
             st.caption("사용 중인 작업이 있는 연결은 삭제할 수 없습니다.")
-            if st.button("연결 삭제", disabled=active):
+            if confirm_button(
+                "delete_connection_" + p["id"],
+                "연결 삭제",
+                "이 연결을 삭제할까요?",
+                "로컬 저장소의 연결 설정과 저장된 OS 자격 증명을 삭제합니다. 이 연결을 사용하는 작업이 있으면 삭제되지 않습니다.",
+                disabled=active,
+            ):
                 try:
                     store.delete("connection_profile", p["id"])
                     if p.get("secret_ref"):
@@ -279,17 +324,24 @@ if page == STEPS[0]:
             "application/json",
         )
         uploaded = st.file_uploader("연결 설정 파일 선택", type="json")
-        if uploaded and st.button("연결 설정 가져오기", disabled=active):
-            try:
-                allowed = {"name", "role", "host", "port", "database", "user", "tls", "ca", "cert", "key"}
-                clean = [{k: v for k, v in entry.items() if k in allowed} for entry in json.load(uploaded)]
-                for entry in clean:
-                    db.validate_profile(entry)
-                for entry in clean:
-                    store.save("connection_profile", entry)
-                go(1, "연결 설정을 가져왔습니다. 비밀번호를 입력하고 접속을 확인하세요.")
-            except Exception as exc:
-                report(exc)
+        if uploaded:
+            if confirm_button(
+                "import_connections",
+                "연결 설정 가져오기",
+                "연결 설정을 가져올까요?",
+                "파일의 연결 설정을 로컬 저장소에 추가하거나 같은 ID의 기존 설정으로 덮어씁니다. 비밀번호는 가져오지 않으며, 현재 DB에는 접속하지 않습니다.",
+                disabled=active,
+            ):
+                try:
+                    allowed = {"name", "role", "host", "port", "database", "user", "tls", "ca", "cert", "key"}
+                    clean = [{k: v for k, v in entry.items() if k in allowed} for entry in json.load(uploaded)]
+                    for entry in clean:
+                        db.validate_profile(entry)
+                    for entry in clean:
+                        store.save("connection_profile", entry)
+                    go(1, "연결 설정을 가져왔습니다. 비밀번호를 입력하고 접속을 확인하세요.")
+                except Exception as exc:
+                    report(exc)
 
 elif page == STEPS[1]:
     require_connections()
@@ -403,7 +455,14 @@ elif page == STEPS[1]:
                     go(2, "작업을 복제했습니다.")
                 except Exception as exc:
                     report(exc)
-            if c2.button("작업 삭제", disabled=active):
+            if confirm_button(
+                "delete_job_" + j["id"],
+                "작업 삭제",
+                "이 복사 작업을 삭제할까요?",
+                "로컬 작업 설정만 삭제합니다. 이미 실행한 이력과 결과는 보존되며, DB 스냅샷은 변경하지 않습니다.",
+                container=c2,
+                disabled=active,
+            ):
                 try:
                     store.delete("backup_job", j["id"])
                     go(2, "작업을 삭제했습니다.")
@@ -506,7 +565,22 @@ elif page in STEPS[2:4]:
             + (f"작업당 최대 {limit:,}행 테스트" if is_test else "전체 행 저장")
         )
     button = f"{len(selected)}개 작업 테스트 시작" if is_test else f"{len(selected)}개 작업 전체 실행"
-    if st.button(button, type="primary", disabled=active or not selected or incompatible):
+    action = "start_test" if is_test else "start_full"
+    title = "소량 테스트를 시작할까요?" if is_test else "전체 스냅샷을 실행할까요?"
+    message = (
+        f"선택한 {len(selected)}개 작업에서 원본을 최대 {limit:,}행씩 읽고 대상 DB의 임시 테이블에 적재·검증합니다. "
+        "정식 스냅샷은 변경하지 않지만 대상 DB와 로컬 중간 파일을 사용합니다."
+        if is_test
+        else f"선택한 {len(selected)}개 작업의 원본 전체 데이터를 읽어 대상 DB에 저장합니다. 기준일 {date}의 기존 행은 교체되고 다른 기준일은 유지됩니다."
+    )
+    if confirm_button(
+        action,
+        button,
+        title,
+        message,
+        type="primary",
+        disabled=active or not selected or incompatible,
+    ):
         try:
             spec = build_spec(store, selected, date, limit, work_dir)
             st.session_state["view_run"] = process.start(store, spec, secrets)
@@ -713,7 +787,14 @@ else:
         if r["error"]:
             st.error(r["error"])
         if r["state"] in ACTIVE:
-            if st.button("복사 취소", key="cancel_" + run_id, disabled=r["state"] == "CANCEL_REQUESTED"):
+            if confirm_button(
+                "cancel_" + run_id,
+                "복사 취소",
+                "복사를 취소할까요?",
+                "취소 요청을 보내고 후속 테이블 처리를 중단합니다. 이미 진행 중인 DB 요청은 끝날 때까지 지연될 수 있으며, 중간 결과는 복구 화면에서 확인합니다.",
+                key="cancel_" + run_id,
+                disabled=r["state"] == "CANCEL_REQUESTED",
+            ):
                 store.cancel(run_id)
                 st.rerun(scope="fragment")
             st.caption("진행 중인 DB 요청이 끝날 때까지 취소가 지연될 수 있습니다.")
@@ -722,7 +803,14 @@ else:
                 confirm = st.checkbox(
                     "강제 종료 후 복구가 필요할 수 있음을 확인했습니다", key="force_confirm_" + run_id
                 )
-                if st.button("강제 중단", key="force_" + run_id, disabled=not confirm):
+                if confirm_button(
+                    "force_" + run_id,
+                    "강제 중단",
+                    "복사 프로세스를 강제 중단할까요?",
+                    "worker 프로세스를 종료합니다. 서버의 현재 쿼리가 즉시 멈춘다는 보장은 없고, 대상 staging과 공개 상태를 결과·복구 화면에서 확인해야 할 수 있습니다.",
+                    key="force_" + run_id,
+                    disabled=not confirm,
+                ):
                     try:
                         process.force_stop(store, run_id)
                         st.rerun(scope="fragment")
@@ -744,8 +832,14 @@ else:
                         report(exc)
             else:
                 c1, c2 = st.columns(2)
-                if c1.button(
-                    "같은 설정으로 다시 시도", type="primary", key="retry_" + run_id, disabled=active
+                if confirm_button(
+                    "retry_" + run_id,
+                    "같은 설정으로 다시 시도",
+                    "같은 설정으로 다시 시도할까요?",
+                    "검증된 중간 파일은 재사용할 수 있지만 대상 staging 적재와 검증을 다시 수행합니다. 전체 실행이면 같은 기준일의 대상 데이터가 다시 교체될 수 있습니다.",
+                    type="primary",
+                    key="retry_" + run_id,
+                    disabled=active,
                 ):
                     try:
                         st.session_state["view_run"] = process.retry(store, run_id, secrets)
@@ -825,8 +919,11 @@ else:
                     "이 실행의 임시 적재 테이블과 중간 파일만 지웁니다. 정식 스냅샷과 로그는 유지합니다. 정리 후에는 원본부터 다시 읽습니다."
                 )
                 credentials(list(spec["profiles"].values()), "cleanup_" + run_id)
-                if st.button(
+                if confirm_button(
+                    "clean_" + run_id,
                     "이 실행의 중간 파일 정리",
+                    "이 실행의 중간 파일을 정리할까요?",
+                    "이 실행의 staging 테이블과 중간 파일을 삭제합니다. 정식 스냅샷과 로그는 유지되지만, 이후 재시도는 원본에서 다시 읽어야 합니다.",
                     key="clean_" + run_id,
                     disabled=active or bool(r["publish_pending"]),
                 ):

@@ -121,6 +121,10 @@ def test_start_moves_to_results_and_success_test_reuses_selection(tmp_path, monk
     assert app.sidebar.radio[0].value == STEPS[2]
     button(app, "1개 작업 테스트 시작").click().run()
     assert not app.exception
+    assert app.sidebar.radio[0].value == STEPS[2]
+    assert any("대상 DB의 임시 테이블" in message.value for message in app.info)
+    button(app, "확인하고 계속").click().run()
+    assert not app.exception
     assert app.sidebar.radio[0].value == STEPS[4]
     button(app, "다음 · 같은 작업 전체 실행").click().run()
     assert not app.exception
