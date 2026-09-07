@@ -179,6 +179,23 @@ def test_generated_column_and_snapshot_conflict():
         db.expected_schema(dict(schema, columns=[dict(col, name="SNAPSHOT_DATE")]))
 
 
+def test_schema_index_details_are_opt_in():
+    responses = {
+        db.ENGINE_SQL: [("InnoDB",)],
+        db.COLUMNS_SQL: [("id", "int", "NO", None, None, "")],
+        db.INDEXES_SQL: [("PRIMARY", 0, 1, "id", None), ("lookup", 1, 1, "id", None)],
+    }
+
+    def query(sql, args):
+        return responses[sql]
+
+    basic = db.schema(query, "db", "orders")
+    detailed = db.schema(query, "db", "orders", include_indexes=True)
+    assert "indexes" not in basic
+    assert detailed["indexes"]["lookup"] == [(1, "id", None)]
+    assert basic["key"] == detailed["key"] == ["id"]
+
+
 def test_error_redaction():
     import pymysql
 

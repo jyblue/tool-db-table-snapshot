@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import re
 import socket
 import ssl
@@ -233,8 +234,6 @@ def rows(conn, sql, args=()):
 
 def bind_value(value):
     # PyMySQL's timedelta encoder mishandles negative fractional/multi-day TIME.
-    import datetime as dt
-
     if isinstance(value, dt.timedelta):
         micros = (value.days * 86400 + value.seconds) * 1000000 + value.microseconds
         sign = "-" if micros < 0 else ""
@@ -295,7 +294,7 @@ def tables(source):
     ]
 
 
-def schema(query, database, table):
+def schema(query, database, table, *, include_indexes=False):
     ident(table)
     engine = query(
         ENGINE_SQL,
@@ -309,36 +308,42 @@ def schema(query, database, table):
         COLUMNS_SQL,
         (database, table),
     )
-    indices = query(
+    index_rows = query(
         INDEXES_SQL,
         (database, table),
     )
     columns = [dict(zip(("name", "type", "nullable", "charset", "collation", "extra"), r)) for r in cols]
-    groups = {}
-    for name, non_unique, seq, col, sub in indices:
+    indexes = {}
+    unique_groups = {}
+    for name, non_unique, seq, col, sub in index_rows:
+        indexes.setdefault(name, []).append((seq, col, sub))
         if not non_unique:
-            groups.setdefault(name, []).append((col, sub))
-    primary = [c for c, _ in groups.get("PRIMARY", [])]
+            unique_groups.setdefault(name, []).append((col, sub))
+    primary = [c for c, _ in unique_groups.get("PRIMARY", [])]
     key = primary
     if not key:
-        for group in groups.values():
+        for group in unique_groups.values():
             if all(
                 c and sub is None and next(x for x in columns if x["name"] == c)["nullable"] == "NO"
                 for c, sub in group
             ):
                 key = [c for c, _ in group]
                 break
-    return {
+    result = {
         "columns": columns,
         "pk": primary,
         "key": key,
-        "unique": {n: [c for c, _ in g] for n, g in groups.items()},
+        "unique": {n: [c for c, _ in g] for n, g in unique_groups.items()},
     }
+    if include_indexes:
+        result["indexes"] = indexes
+    return result
 
 
 def expected_schema(source):
     if any(c["name"].casefold() == "snapshot_date" for c in source["columns"]):
         raise ValueError("원본 snapshot_date 컬럼과 충돌합니다.")
+    snapshot_key = ["snapshot_date", *source["pk"]] if source["pk"] else []
     return {
         "columns": [dict(c, extra="") for c in source["columns"]]
         + [
@@ -351,9 +356,9 @@ def expected_schema(source):
                 "extra": "",
             }
         ],
-        "pk": ["snapshot_date"] + source["pk"] if source["pk"] else [],
-        "key": ["snapshot_date"] + source["pk"] if source["pk"] else [],
-        "unique": {"PRIMARY": ["snapshot_date"] + source["pk"]} if source["pk"] else {},
+        "pk": snapshot_key,
+        "key": snapshot_key,
+        "unique": {"PRIMARY": snapshot_key} if snapshot_key else {},
     }
 
 
@@ -434,12 +439,11 @@ def compare_schema(actual, expected):
         )
 
 
-def has_leading_index(query, database, table, column):
-    first_columns = {}
-    for name, _, sequence, indexed_column, prefix in query(INDEXES_SQL, (database, table)):
-        if sequence == 1 and prefix is None:
-            first_columns[name] = indexed_column
-    return column in first_columns.values()
+def has_leading_index(schema_info, column):
+    return any(
+        any(sequence == 1 and prefix is None and indexed_column == column for sequence, indexed_column, prefix in entries)
+        for entries in schema_info.get("indexes", {}).values()
+    )
 
 
 def prepare(conn, database, table, expected):
@@ -452,8 +456,9 @@ def prepare(conn, database, table, expected):
     if not exists:
         with conn.cursor() as cur:
             cur.execute(create_sql(table, expected))
-    compare_schema(schema(query, database, table), expected)
-    if table != MARKER and not has_leading_index(query, database, table, "snapshot_date"):
+    actual = schema(query, database, table, include_indexes=True)
+    compare_schema(actual, expected)
+    if table != MARKER and not has_leading_index(actual, "snapshot_date"):
         raise ValueError(f"{table}: snapshot_date 선두 인덱스가 필요합니다.")
     for sql in (
         "SELECT 1 FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=%s AND EVENT_OBJECT_TABLE=%s",
