@@ -547,13 +547,25 @@ elif page == HISTORY_PAGES[2]:
         older = st.selectbox("이전 기준일", dates, format_func=str)
         newer = st.selectbox("비교 기준일", [date for date in dates if date != older], format_func=str)
         max_rows = st.number_input("날짜별 최대 비교 행 수", 1, 5000, 5000, step=100)
+        max_results = st.number_input("결과 최대 건수", 1, 1000, 200, step=50)
         if st.button("행 비교", type="primary"):
-            result = compare_target(conn, target_profile["database"], table, older, newer, int(max_rows))
+            result = compare_target(
+                conn, target_profile["database"], table, older, newer, int(max_rows), int(max_results)
+            )
             st.session_state["compare_result"] = result
         result = st.session_state.get("compare_result")
-        if result and result["table"] == table and result["older"] == older and result["newer"] == newer:
+        if (
+            result
+            and result["table"] == table
+            and result["older"] == older
+            and result["newer"] == newer
+            and result.get("max_rows") == int(max_rows)
+            and result.get("max_results") == int(max_results)
+        ):
             if result["truncated"]:
                 st.warning("비교 행 수 상한에 도달했습니다. 전체 차이가 아니라 상한 내 결과입니다.")
+            if result["results_truncated"]:
+                st.warning("결과 최대 건수에 도달했습니다. 표시 결과는 설정한 건수까지입니다.")
             st.dataframe(
                 {
                     "구분": ["이전 행 수", "비교 행 수", "추가", "삭제", "변경"],

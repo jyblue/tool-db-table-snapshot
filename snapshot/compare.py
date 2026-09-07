@@ -6,6 +6,7 @@ from . import db
 
 MAX_ROWS = 5_000
 MAX_CHANGES = 200
+MAX_RESULTS = 1_000
 
 
 def target_tables(conn, database):
@@ -44,11 +45,13 @@ def available_dates(conn, database, table):
     ]
 
 
-def compare(conn, database, table, older, newer, max_rows=MAX_ROWS):
+def compare(conn, database, table, older, newer, max_rows=MAX_ROWS, max_results=MAX_CHANGES):
     if older == newer:
         raise ValueError("서로 다른 두 날짜를 선택하세요.")
     if type(max_rows) is not int or not 1 <= max_rows <= MAX_ROWS:
         raise ValueError(f"비교 행 수는 1~{MAX_ROWS:,} 범위여야 합니다.")
+    if type(max_results) is not int or not 1 <= max_results <= MAX_RESULTS:
+        raise ValueError(f"결과 최대 건수는 1~{MAX_RESULTS:,} 범위여야 합니다.")
     columns, key = _metadata(conn, database, table)
     names = ",".join(db.ident(name) for name in columns)
     order = ",".join(db.ident(name) for name in key)
@@ -65,14 +68,14 @@ def compare(conn, database, table, older, newer, max_rows=MAX_ROWS):
     new_rows, new_truncated = load(newer)
     added_keys = sorted(new_rows.keys() - old_rows.keys(), key=repr)
     removed_keys = sorted(old_rows.keys() - new_rows.keys(), key=repr)
-    added = [
-        {"key": row_key, "row": dict(zip(columns, new_rows[row_key]))} for row_key in added_keys[:MAX_CHANGES]
+    added_all = [
+        {"key": row_key, "row": dict(zip(columns, new_rows[row_key]))} for row_key in added_keys[:max_results]
     ]
-    removed = [
+    removed_all = [
         {"key": row_key, "row": dict(zip(columns, old_rows[row_key]))}
-        for row_key in removed_keys[:MAX_CHANGES]
+        for row_key in removed_keys[:max_results]
     ]
-    changed = []
+    changed_all = []
     for row_key in sorted(old_rows.keys() & new_rows.keys(), key=repr):
         old_row, new_row = old_rows[row_key], new_rows[row_key]
         differences = {
@@ -80,16 +83,34 @@ def compare(conn, database, table, older, newer, max_rows=MAX_ROWS):
             for i, name in enumerate(columns)
             if name != "snapshot_date" and old_row[i] != new_row[i]
         }
-        if differences and len(changed) < MAX_CHANGES:
-            changed.append({"key": row_key, "columns": differences})
+        if differences and len(changed_all) < max_results:
+            changed_all.append({"key": row_key, "columns": differences})
+    remaining = max_results
+    added = added_all[:remaining]
+    remaining -= len(added)
+    removed = removed_all[:remaining]
+    remaining -= len(removed)
+    changed = changed_all[:remaining]
+    total_changes = len(added_keys) + len(removed_keys)
+    total_changes += sum(
+        1
+        for row_key in old_rows.keys() & new_rows.keys()
+        if any(
+            name != "snapshot_date" and old_rows[row_key][i] != new_rows[row_key][i]
+            for i, name in enumerate(columns)
+        )
+    )
     return {
         "table": table,
         "older": older,
         "newer": newer,
+        "max_rows": max_rows,
+        "max_results": max_results,
         "older_count": len(old_rows),
         "newer_count": len(new_rows),
         "added": added,
         "removed": removed,
         "changed": changed,
         "truncated": old_truncated or new_truncated,
+        "results_truncated": total_changes > max_results,
     }

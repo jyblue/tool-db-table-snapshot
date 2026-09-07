@@ -48,3 +48,27 @@ def test_compare_reports_added_removed_changed(monkeypatch):
 def test_compare_rejects_same_date():
     with pytest.raises(ValueError, match="서로 다른"):
         compare.compare(FakeConnection(), "target", "orders", "2026-09-06", "2026-09-06")
+
+
+def test_compare_limits_displayed_results(monkeypatch):
+    def rows_with_many_changes(conn, sql, args=()):
+        if "ENGINE" in sql:
+            return [("InnoDB",)]
+        if "information_schema.COLUMNS" in sql:
+            return [
+                ("snapshot_date", "date", "NO", None, None, ""),
+                ("id", "int", "NO", None, None, ""),
+                ("status", "varchar(10)", "NO", "utf8mb4", "utf8mb4_bin", ""),
+            ]
+        if "information_schema.STATISTICS" in sql:
+            return [("PRIMARY", 0, 1, "snapshot_date", None), ("PRIMARY", 0, 2, "id", None)]
+        if args[0] == dt.date(2026, 9, 6):
+            return [(args[0], 1, "old"), (args[0], 2, "old")]
+        return [(args[0], 1, "new"), (args[0], 3, "new")]
+
+    monkeypatch.setattr(compare.db, "rows", rows_with_many_changes)
+    result = compare.compare(
+        FakeConnection(), "target", "orders", dt.date(2026, 9, 6), dt.date(2026, 9, 7), max_results=1
+    )
+    assert len(result["added"]) + len(result["removed"]) + len(result["changed"]) == 1
+    assert result["results_truncated"] is True
