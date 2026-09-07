@@ -599,8 +599,7 @@ def test_target_row_lock_timeout_rolls_back_entire_publication(env):
     assert query(root, "SELECT COUNT(*) FROM snapshot_target._snapshot_runs") == ((1,),)
 
 
-def test_target_without_date_index_is_currently_accepted(env):
-    # Characterization of an open load risk, not an assertion that this is safe.
+def test_target_without_date_index_is_rejected(env):
     store, root, job, _, _ = env
     expected = db.expected_schema(
         db.schema(lambda sql, args: db.rows(root, sql, args), "snapshot_source", "no_key")
@@ -608,13 +607,8 @@ def test_target_without_date_index_is_currently_accepted(env):
     query(root, "USE snapshot_target")
     db.prepare(root.target_conn, "snapshot_target", "no_key", expected)
     query(root, "ALTER TABLE snapshot_target.no_key DROP INDEX snapshot_date_idx")
-    db.prepare(
-        root.target_conn, "snapshot_target", "no_key", expected
-    )  # Non-unique index is not checked yet.
-    with root.target_conn.cursor(pymysql.cursors.DictCursor) as cursor:
-        cursor.execute("EXPLAIN DELETE FROM snapshot_target.no_key WHERE snapshot_date='2026-09-06'")
-        plan = cursor.fetchone()
-    assert plan["type"] == "ALL" and plan["key"] is None
+    with pytest.raises(ValueError, match="snapshot_date 선두 인덱스"):
+        db.prepare(root.target_conn, "snapshot_target", "no_key", expected)
 
 
 def test_target_load_batches_but_publication_is_one_statement(env, monkeypatch):

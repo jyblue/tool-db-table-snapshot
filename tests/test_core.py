@@ -225,7 +225,7 @@ def test_negative_time_binding():
         "SELECT VERSION() /* extra */",
     ],
 )
-def test_source_accepts_only_fixed_metadata_templates(sql):
+def test_source_allows_only_fixed_metadata_templates(sql):
     source = object.__new__(db.Source)
     with pytest.raises(ValueError, match="템플릿"):
         source.rows(sql)

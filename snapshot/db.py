@@ -434,6 +434,14 @@ def compare_schema(actual, expected):
         )
 
 
+def has_leading_index(query, database, table, column):
+    first_columns = {}
+    for name, _, sequence, indexed_column, prefix in query(INDEXES_SQL, (database, table)):
+        if sequence == 1 and prefix is None:
+            first_columns[name] = indexed_column
+    return column in first_columns.values()
+
+
 def prepare(conn, database, table, expected):
     def query(sql, args=()):
         return rows(conn, sql, args)
@@ -445,6 +453,8 @@ def prepare(conn, database, table, expected):
         with conn.cursor() as cur:
             cur.execute(create_sql(table, expected))
     compare_schema(schema(query, database, table), expected)
+    if table != MARKER and not has_leading_index(query, database, table, "snapshot_date"):
+        raise ValueError(f"{table}: snapshot_date 선두 인덱스가 필요합니다.")
     for sql in (
         "SELECT 1 FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=%s AND EVENT_OBJECT_TABLE=%s",
         "SELECT 1 FROM information_schema.TABLE_CONSTRAINTS WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s AND CONSTRAINT_TYPE IN ('FOREIGN KEY','CHECK')",
