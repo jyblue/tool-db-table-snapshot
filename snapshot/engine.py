@@ -200,7 +200,7 @@ class Engine:
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         path = self.directory / "events.jsonl"
         event = {
-            "time": dt.datetime.now(dt.UTC).isoformat(),
+            "time": dt.datetime.now(dt.timezone.utc).isoformat(),
             "level": level,
             "run_id": self.run_id,
             "table": table,

@@ -8,7 +8,7 @@
 
 Git 설치 없이 [최신 Release](https://github.com/jyblue/tool-db-table-snapshot/releases/latest)에서 **`mariadb-snapshot-v0.2.0.zip`**을 다운로드하고 압축을 푸세요. 아래 명령은 압축을 푼 프로젝트 폴더에서 실행합니다.
 
-Python **3.11 이상**, 원본 MariaDB 접속 정보, 별도 MariaDB 인스턴스의 쓰기 가능한 대상 DB/schema, 중간 파일용 디스크 공간이 필요합니다. 대상 schema는 미리 생성하세요. 스냅샷 테이블은 앱이 생성합니다. 일반 사용에는 Docker가 필요 없습니다.
+Python **3.10 이상**, 원본 MariaDB 접속 정보, 별도 MariaDB 인스턴스의 쓰기 가능한 대상 DB/schema, 중간 파일용 디스크 공간이 필요합니다. 대상 schema는 미리 생성하세요. 스냅샷 테이블은 앱이 생성합니다. 일반 사용에는 Docker가 필요 없습니다.
 
 프로젝트 폴더에서 실행합니다.
 
@@ -177,4 +177,4 @@ docker compose -f compose.test.yml down -v
 
 **통합 테스트는 `snapshot_source`·`snapshot_target` DB를 삭제·재생성합니다. 반드시 제공된 폐기용 Docker 서버에서만 실행하세요.** 고정 비밀번호는 테스트 전용입니다. 쓰기 권한이 있는 root 연결에서도 원본 DML·DDL이 거부되는지 검증합니다.
 
-macOS / Python 3.12 / MariaDB 11.4 검증 및 성능 기록은 [VALIDATION.md](VALIDATION.md)를 참고하세요. Windows 실기기 검증은 별도이며 CI 설정을 제공합니다.
+macOS / Python 3.12 / MariaDB 11.4 검증 및 성능 기록은 [VALIDATION.md](VALIDATION.md)를 참고하세요. Python 3.10·3.12 호환성은 CI에서 검사하며, Windows 실기기 검증은 별도입니다.

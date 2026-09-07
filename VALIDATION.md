@@ -2,7 +2,7 @@
 
 로컬 데모 준비 스크립트: `scripts/start_demo_db.py`를 프로젝트 폴더와 다른 폴더에서 각각 실행해 고객 100행·주문 1,200행·주문 상세 2,400행이 중복 없이 유지됨을 확인했습니다. 앱의 읽기 전용 Source 연결로 세 테이블 전체 조회도 확인했습니다. Docker 컨테이너는 사용자의 수동 테스트를 위해 실행 상태로 유지했습니다.
 
-검증일: 2026-09-06. macOS arm64, Python 3.12.0, Docker의 MariaDB 11.4 이미지. Python 패키지: Streamlit 1.63.0, PyMySQL 1.2.0, keyring 25.7.0, psutil 7.2.2, pytest 8.4.2.
+검증일: 2026-09-06. macOS arm64, Python 3.12.0, Docker의 MariaDB 11.4 이미지. Python 패키지: Streamlit 1.63.0, PyMySQL 1.2.0, keyring 25.7.0, psutil 7.2.2, pytest 8.4.2. Python 3.10·3.12 호환성은 GitHub Actions에서 검사합니다.
 
 ## 실행 결과
 

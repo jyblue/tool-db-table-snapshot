@@ -1,6 +1,10 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")"
+if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; then
+  echo "Python 3.10 이상이 필요합니다. 현재 인터프리터: $(python3 --version 2>&1)" >&2
+  exit 1
+fi
 if [ ! -x .venv/bin/python ]; then
   python3 -m venv .venv
   .venv/bin/python -m pip install -e .
