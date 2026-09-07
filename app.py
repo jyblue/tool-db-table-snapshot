@@ -18,6 +18,7 @@ from snapshot.secrets import delete_secret, password, safe_error, save_secret
 from snapshot.store import ACTIVE, Store
 from snapshot.workflow import (
     HISTORY_PAGES,
+    MENU_DESCRIPTIONS,
     NAVIGATION,
     RUN_LABELS,
     STAGE_LABELS,
@@ -126,6 +127,7 @@ st.title("MariaDB Snapshot")
 st.caption("원본 DB의 테이블을 읽어 날짜별 분석 데이터로 저장합니다.")
 st.caption("① 연결 설정 → ② 복사 작업 → ③ 소량 테스트 → ④ 전체 실행 → ⑤ 결과·복구")
 st.header(page)
+st.caption(MENU_DESCRIPTIONS[page])
 if "_notice" in st.session_state:
     st.success(st.session_state.pop("_notice"))
 
