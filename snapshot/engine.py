@@ -72,12 +72,16 @@ def build_spec(store, job_ids, date, limit, work_dir):
     if len({j["target_table"].casefold() for j in jobs}) != len(jobs):
         raise ValueError("대상 테이블 매핑이 중복됩니다.")
     path, _ = check_disk(work_dir)
+    source_profiles = {p["id"]: p for p in profiles.values() if p["role"] == "source"}
+    selected_profiles = {i: profiles[i] for j in jobs for i in (j["source_id"], j["target_id"])}
     return {
         "date": str(date),
         "limit": limit,
         "work_dir": str(path),
         "jobs": jobs,
-        "profiles": {i: profiles[i] for j in jobs for i in (j["source_id"], j["target_id"])},
+        # Keep every registered Source so Target isolation also covers an
+        # unselected Source that may point at the Target instance.
+        "profiles": {**source_profiles, **selected_profiles},
     }
 
 
@@ -399,19 +403,12 @@ class Engine:
             self.conn = self.retry(self.target, self.spec["jobs"][0])
             self.store.update_run(self.run_id, server_status="Target 연결됨 / Source 사전 검사")
             target_profile = self.spec["profiles"][self.spec["jobs"][0]["target_id"]]
-            target_identity = db.identity(lambda sql: db.rows(self.conn, sql))
             schemas = []
             # Check every source against target before ANY persistent target DDL/DML.
             for job in self.spec["jobs"]:
                 self.check(force=True)
                 src = self.retry(lambda: self.source(job), job)
                 try:
-                    db.assert_distinct(
-                        self.spec["profiles"][job["source_id"]],
-                        target_profile,
-                        db.identity(src.rows),
-                        target_identity,
-                    )
                     sch = db.schema(src.rows, src.database, job["source_table"])
                     exp = db.expected_schema(sch)
                     if not sch["key"] and (

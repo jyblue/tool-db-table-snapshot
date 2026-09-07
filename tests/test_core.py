@@ -5,6 +5,7 @@ from decimal import Decimal
 import pytest
 
 from snapshot import codec, db
+from snapshot.engine import build_spec
 from snapshot.secrets import safe_error
 from snapshot.store import Store
 
@@ -57,6 +58,58 @@ def test_source_rejects_write_without_connection():
     src = object.__new__(db.Source)
     with pytest.raises(ValueError, match="SELECT"):
         src.rows("DELETE FROM x")
+
+
+def test_rows_rejects_partial_result_warning():
+    class Cursor:
+        warning_count = 1
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, sql, args):
+            pass
+
+        def fetchall(self):
+            return [(1,)]
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+    with pytest.raises(ValueError, match="부분 결과"):
+        db.rows(Connection(), "SELECT 1")
+
+
+def test_build_spec_keeps_unselected_sources_for_isolation(tmp_path):
+    store = Store(tmp_path / "state")
+    base = {"host": "localhost", "port": 3306, "user": "user", "tls": False}
+    store.save("connection_profile", dict(base, id="s1", role="source", name="Source 1", database="source1"))
+    store.save("connection_profile", dict(base, id="s2", role="source", name="Source 2", database="source2"))
+    store.save("connection_profile", dict(base, id="t", role="target", name="Target", database="target"))
+    store.save(
+        "backup_job",
+        {
+            "id": "j",
+            "name": "job",
+            "source_id": "s1",
+            "target_id": "t",
+            "source_table": "records",
+            "target_table": "records",
+            "read_mode": "pk",
+            "batch_rows": 100,
+            "wait_ms": 0,
+            "connect_timeout": 5,
+            "read_timeout": 5,
+            "write_timeout": 5,
+            "retries": 0,
+        },
+    )
+    spec = build_spec(store, ["j"], "2026-09-07", 100, tmp_path / "files")
+    assert set(spec["profiles"]) == {"s1", "s2", "t"}
 
 
 def test_duplicate_start_is_atomic_and_pending_blocks(tmp_path):

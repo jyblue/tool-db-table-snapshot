@@ -6,7 +6,7 @@
 
 ## 로컬 실행
 
-Git 설치 없이 [최신 Release](https://github.com/jyblue/tool-db-table-snapshot/releases/latest)에서 **`mariadb-snapshot-v0.2.2.zip`**을 다운로드하고 압축을 푸세요. 아래 명령은 압축을 푼 프로젝트 폴더에서 실행합니다.
+Git 설치 없이 [최신 Release](https://github.com/jyblue/tool-db-table-snapshot/releases/latest)에서 **`mariadb-snapshot-v0.2.3.zip`**을 다운로드하고 압축을 푸세요. 아래 명령은 압축을 푼 프로젝트 폴더에서 실행합니다.
 
 Python **3.10 이상**, 원본 MariaDB 접속 정보, 별도 MariaDB 인스턴스의 쓰기 가능한 대상 DB/schema, 중간 파일용 디스크 공간이 필요합니다. 대상 schema는 미리 생성하세요. 스냅샷 테이블은 앱이 생성합니다. 일반 사용에는 Docker가 필요 없습니다.
 
@@ -93,7 +93,8 @@ SQL 입력창은 제공하지 않습니다. 메타데이터는 정확히 일치�
 - 각 배치는 `EXPLAIN`으로 인덱스 접근을 확인하고, 전체 스캔·filesort·temporary 계획은 중단합니다. 데이터 조회에는 `ROWS EXAMINED 2000`을 적용합니다.
 - Source 세션에는 SQL 실행 **2초**, 잠금 대기 **1초**, 네트워크 쓰기 **2초**, 유휴 연결 **30초** 제한을 적용합니다. 서버가 중단 가능한 지점에서 확인하므로 정확한 중단 시각은 보장하지 않습니다.
 - 배치 사이에는 최소 **100ms** 대기하고, 느린 조회 후에는 추가로 대기합니다. 실행 전체의 원본 추출 시간 예산은 **10분**입니다.
-- 같은 원본 서버에서 앱의 Source 조회는 동시에 하나만 실행합니다. 이는 애플리케이션 mutex이며 테이블·행 잠금은 아닙니다.
+- 같은 원본 서버에서 앱의 Source 조회는 동시에 하나만 실행합니다. 이는 서버 공통 이름의 애플리케이션 mutex이며 테이블·행 잠금은 아닙니다.
+- 날짜별 비교도 등록된 모든 Source와 Target 격리를 확인하고, Target 연결을 읽기 전용 세션으로 제한합니다. 비교 조회에는 행·조사량 상한을 적용합니다.
 - 원본 통신 오류가 나도 자동으로 전체 조회를 반복하지 않습니다. 원인을 확인한 뒤 사용자가 수동 재시도합니다.
 - 상한·경고·잠금 시간 초과가 발생하면 부분 결과를 성공으로 저장하지 않고 실행을 실패 처리합니다.
 - 운영 중에는 실행 시간대, CPU·디스크 I/O, buffer pool, slow query log, 복제 지연, 디스크 여유 공간을 함께 모니터링합니다. 작은 배치와 충분한 대기부터 시작합니다.
@@ -126,9 +127,9 @@ python3 scripts/start_demo_db.py
 
 Windows에서는 `py -3 scripts/start_demo_db.py`를 실행합니다. 어느 폴더에서 호출해도 프로젝트의 Docker 설정을 사용합니다.
 
-스크립트가 MariaDB 11.4 **원본·대상 컨테이너 2개**를 시작하고 준비 완료를 기다린 뒤 각각의 인스턴스에 DB를 생성합니다. 원본 컨테이너에는 `snapshot_source`와 샘플 데이터만, 대상 컨테이너에는 빈 `snapshot_target`만 생성합니다. 실행 후 두 인스턴스의 서버 식별자와 교차 DB 생성을 자동 확인합니다. 재실행하면 누락된 샘플 ID만 추가하며 기존 행과 대상 데이터는 유지합니다.
+스크립트가 MariaDB 11.4 **원본·대상 컨테이너 2개**를 시작하고 준비 완료를 기다린 뒤 각각의 인스턴스에 DB를 생성합니다. 원본 컨테이너에는 `snapshot_source`와 샘플 데이터만, 대상 컨테이너에는 `snapshot_target`만 생성합니다. 실행 후 두 인스턴스의 서버 식별자를 확인합니다. 재실행하면 누락된 샘플 ID만 추가하며 기존 행과 대상 데이터는 유지합니다.
 
-이전 버전에서 원본 컨테이너에 잘못 생성된 `snapshot_target` 또는 대상 컨테이너에 잘못 생성된 `snapshot_source`가 있으면, 스크립트가 해당 **교차 테스트 schema만** 삭제하고 올바른 인스턴스에 다시 준비합니다.
+준비 스크립트는 기존 schema를 삭제하지 않습니다. 테스트 데이터를 처음부터 다시 만들려면 명시적으로 `docker compose -f compose.test.yml down -v`를 실행한 뒤 준비 스크립트를 다시 실행하세요.
 
 | 원본 테이블 | 최초 생성 행 수 | 확인할 내용 |
 | --- | ---: | --- |
@@ -173,10 +174,10 @@ DB와 데이터는 준비 스크립트가 생성하므로 별도 SQL 입력이 �
 .venv/bin/ruff check .
 .venv/bin/pytest -q -m 'not integration'
 docker compose -f compose.test.yml up -d --wait
-SNAPSHOT_TEST_PORT=33316 SNAPSHOT_TEST_TARGET_PORT=33318 .venv/bin/pytest -q tests/test_integration.py
+SNAPSHOT_TEST_PORT=33316 SNAPSHOT_TEST_TARGET_PORT=33318 SNAPSHOT_TEST_RESET=1 .venv/bin/pytest -q tests/test_integration.py
 docker compose -f compose.test.yml down -v
 ```
 
-**통합 테스트는 `snapshot_source`·`snapshot_target` DB를 삭제·재생성합니다. 반드시 제공된 폐기용 Docker 서버에서만 실행하세요.** 고정 비밀번호는 테스트 전용입니다. 쓰기 권한이 있는 root 연결에서도 원본 DML·DDL이 거부되는지 검증합니다.
+**통합 테스트는 `SNAPSHOT_TEST_RESET=1`을 명시한 경우에만 `snapshot_source`·`snapshot_target` DB를 삭제·재생성합니다. 반드시 제공된 폐기용 Docker 서버에서만 실행하세요.** 고정 비밀번호는 테스트 전용입니다. 쓰기 권한이 있는 root 연결에서도 원본 DML·DDL이 거부되는지 검증합니다.
 
 macOS / Python 3.12 / MariaDB 11.4 검증 및 성능 기록은 [VALIDATION.md](VALIDATION.md)를 참고하세요. Python 3.10·3.12 호환성은 CI에서 검사하며, Windows 실기기 검증은 별도입니다.

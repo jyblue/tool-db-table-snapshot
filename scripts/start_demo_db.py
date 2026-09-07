@@ -57,12 +57,8 @@ def main():
         target_id = query("mariadb-target", "SELECT @@hostname, @@port, @@server_id")[0]
         if source_id == target_id:
             raise RuntimeError("Source와 Target이 같은 MariaDB 인스턴스입니다.")
-        # Remove schemas left by the old single-instance demo layout. These names
-        # are test-only; the real target schema on mariadb-target is preserved.
-        if "snapshot_target" in query("mariadb", "SHOW DATABASES"):
-            query("mariadb", "DROP DATABASE `snapshot_target`")
-        if "snapshot_source" in query("mariadb-target", "SHOW DATABASES"):
-            query("mariadb-target", "DROP DATABASE `snapshot_source`")
+        # Never delete an existing schema implicitly. The compose volumes can be
+        # reset explicitly with `docker compose ... down -v` when needed.
     except FileNotFoundError:
         print("Docker Desktop을 설치하고 실행한 뒤 다시 시도하세요.", file=sys.stderr)
         return 1
@@ -76,7 +72,7 @@ def main():
     print("앱 DB명: Source=snapshot_source, Target=snapshot_target")
     print("원본 테이블: demo_customers, demo_orders, demo_order_items (모두 PK 배치 읽기 지원)")
     print("비교 확인용 Target 테이블: demo_compare (2026-09-06 / 2026-09-07)")
-    print("기존 행과 대상 데이터는 유지됩니다. 테스트 전용이며 운영 환경에 사용하지 마세요.")
+    print("기존 행과 대상 데이터는 유지됩니다. 데이터 초기화는 compose down -v로 명시적으로 수행하세요.")
     return 0
 
 

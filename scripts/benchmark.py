@@ -34,6 +34,16 @@ def main():
     )
     if args.port == args.target_port:
         parser.error("Source and Target must use separate MariaDB instances")
+    with root.cursor() as cur:
+        cur.execute("SELECT @@hostname, @@port, @@datadir")
+        source_identity = cur.fetchone()
+    with target_root.cursor() as cur:
+        cur.execute("SELECT @@hostname, @@port, @@datadir")
+        target_identity = cur.fetchone()
+    if source_identity == target_identity:
+        root.close()
+        target_root.close()
+        parser.error("Source and Target must be separate MariaDB instances")
     for conn, name in ((root, "snapshot_bench_source"), (target_root, "snapshot_bench_target")):
         with conn.cursor() as cur:
             cur.execute(f"DROP DATABASE IF EXISTS `{name}`")

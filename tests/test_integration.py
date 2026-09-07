@@ -21,12 +21,26 @@ def env(tmp_path):
     target_port = os.environ.get("SNAPSHOT_TEST_TARGET_PORT")
     if not port or not target_port:
         pytest.skip("Set SNAPSHOT_TEST_PORT and SNAPSHOT_TEST_TARGET_PORT to separate disposable servers")
+    if os.environ.get("SNAPSHOT_TEST_RESET") != "1":
+        pytest.fail("Set SNAPSHOT_TEST_RESET=1 to confirm that the disposable test databases may be reset")
+    if int(port) == int(target_port):
+        pytest.fail("Source and Target test ports must be different")
     root = pymysql.connect(
         host="127.0.0.1", port=int(port), user="root", password="snapshot-test-only", autocommit=True
     )
     root.target_conn = pymysql.connect(
         host="127.0.0.1", port=int(target_port), user="root", password="snapshot-test-only", autocommit=True
     )
+    with root.cursor() as cursor:
+        cursor.execute("SELECT @@hostname, @@port, @@datadir")
+        source_identity = cursor.fetchone()
+    with root.target_conn.cursor() as cursor:
+        cursor.execute("SELECT @@hostname, @@port, @@datadir")
+        target_identity = cursor.fetchone()
+    if source_identity == target_identity:
+        root.target_conn.close()
+        root.close()
+        pytest.fail("Source and Target test connections must be separate MariaDB instances")
     query(root.target_conn, "DROP DATABASE IF EXISTS snapshot_target")
     query(root.target_conn, "CREATE DATABASE snapshot_target CHARACTER SET utf8mb4")
     with root.cursor() as c:
@@ -439,6 +453,34 @@ def test_same_physical_schema_blocks_before_target_ddl(env):
     )
 
 
+def test_unselected_source_alias_blocks_target_before_ddl(env):
+    store, root, _, secrets, _ = env
+    store.save(
+        "connection_profile",
+        {
+            "id": "alias",
+            "name": "alias source",
+            "role": "source",
+            "host": "127.0.0.1",
+            "port": int(os.environ["SNAPSHOT_TEST_TARGET_PORT"]),
+            "database": "snapshot_target",
+            "user": "root",
+            "tls": False,
+        },
+    )
+    secrets["alias"] = "snapshot-test-only"
+    result = run(env)
+    assert result["state"] == "FAILED" and "같은 서버" in result["error"]
+    assert (
+        query(
+            root.target_conn,
+            "SELECT COUNT(*) FROM information_schema.TABLES "
+            "WHERE TABLE_SCHEMA='snapshot_target' AND TABLE_NAME='_snapshot_runs'",
+        )[0][0]
+        == 0
+    )
+
+
 def test_incoming_fk_blocks_cascading_writes(env):
     assert run(env)["state"] == "SUCCESS"
     query(
@@ -624,6 +666,16 @@ def test_source_server_timeout_and_mutex(env, protected_source):
     replacement.close()
 
 
+def test_source_mutex_covers_different_databases(env):
+    profile = next(p for p in env[0].profiles() if p["id"] == "s")
+    first = db.Source(profile, env[3]["s"])
+    try:
+        with pytest.raises(ValueError, match="다른 스냅샷"):
+            db.Source(dict(profile, database="information_schema"), env[3]["s"])
+    finally:
+        first.close()
+
+
 def test_source_read_does_not_wait_for_row_writer_or_hold_mdl(env, protected_source):
     root, source = env[1], protected_source
     columns = [{"name": "a"}, {"name": "b"}, {"name": "s"}]
@@ -678,19 +730,29 @@ def test_source_examined_limit_never_returns_partial_success(env, protected_sour
 
 
 def test_target_date_compare_reports_changed_and_removed_rows(env):
-    store, root, _, _, _ = env
+    store, root, _, secrets, _ = env
     assert run(env, date="2026-09-06")["state"] == "SUCCESS"
     query(root, "UPDATE snapshot_source.records SET s='changed' WHERE a=0 AND b=0")
     query(root, "DELETE FROM snapshot_source.records WHERE a=0 AND b=1")
     assert run(env, date="2026-09-07")["state"] == "SUCCESS"
-    root.target_conn.select_db("snapshot_target")
-    result = compare.compare(
-        root.target_conn,
-        "snapshot_target",
-        "records",
-        dt.date(2026, 9, 6),
-        dt.date(2026, 9, 7),
-    )
+    target = next(p for p in store.profiles() if p["id"] == "t")
+    source_profiles = [p for p in store.profiles() if p["role"] == "source"]
+    conn = db.connect(target, secrets["t"], target=True, read_only=True)
+    try:
+        db.check_target_isolation(conn, target, source_profiles, lambda p: secrets[p["id"]])
+        assert compare.available_dates(conn, "snapshot_target", "records")[:2] == [
+            dt.date(2026, 9, 7),
+            dt.date(2026, 9, 6),
+        ]
+        result = compare.compare(
+            conn,
+            "snapshot_target",
+            "records",
+            dt.date(2026, 9, 6),
+            dt.date(2026, 9, 7),
+        )
+    finally:
+        conn.close()
     assert result["older_count"] == 1205
     assert result["newer_count"] == 1204
     assert result["removed"][0]["key"] == (0, 1)

@@ -492,7 +492,9 @@ elif page in STEPS[2:4]:
                 st.success(f"쓰기 가능 · 여유 {free / 1024**3:.2f} GiB")
             except Exception as exc:
                 report(exc)
-    needed = {pid for i in selected for pid in (jobs[i]["source_id"], jobs[i]["target_id"])}
+    # All registered Sources participate in Target isolation checks, including
+    # Sources not selected for this run.
+    needed = set(sources) | {jobs[i]["target_id"] for i in selected}
     credentials([profiles[pid] for pid in sorted(needed)], "launch")
     incompatible = len({jobs[i]["target_id"] for i in selected}) > 1
     if incompatible:
@@ -524,10 +526,17 @@ elif page == HISTORY_PAGES[2]:
     target_ids = targets
     target_id = st.selectbox("비교할 대상 DB", target_ids, format_func=lambda x: label(profiles[x]))
     target_profile = profiles[target_id]
-    credentials([target_profile], "compare")
+    compare_sources = [profiles[pid] for pid in sources]
+    credentials([target_profile, *compare_sources], "compare")
     conn = None
     try:
-        conn = db.connect(target_profile, password(target_profile, secrets), target=True)
+        conn = db.connect(target_profile, password(target_profile, secrets), target=True, read_only=True)
+        db.check_target_isolation(
+            conn,
+            target_profile,
+            compare_sources,
+            lambda p: password(p, secrets),
+        )
         names = target_tables(conn, target_profile["database"])
         if not names:
             st.info("비교할 대상 스냅샷 테이블이 없습니다. 먼저 전체 실행을 완료하세요.")
@@ -815,7 +824,7 @@ else:
                 st.caption(
                     "이 실행의 임시 적재 테이블과 중간 파일만 지웁니다. 정식 스냅샷과 로그는 유지합니다. 정리 후에는 원본부터 다시 읽습니다."
                 )
-                credentials([spec["profiles"][spec["jobs"][0]["target_id"]]], "cleanup_" + run_id)
+                credentials(list(spec["profiles"].values()), "cleanup_" + run_id)
                 if st.button(
                     "이 실행의 중간 파일 정리",
                     key="clean_" + run_id,

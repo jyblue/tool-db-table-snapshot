@@ -39,7 +39,7 @@ def available_dates(conn, database, table):
         for row in db.rows(
             conn,
             f"SELECT DISTINCT `snapshot_date` FROM {db.ident(table)} "
-            "WHERE `snapshot_date` IS NOT NULL ORDER BY `snapshot_date` DESC LIMIT %s",
+            "WHERE `snapshot_date` IS NOT NULL ORDER BY `snapshot_date` DESC LIMIT %s ROWS EXAMINED 10000",
             (1000,),
         )
     ]
@@ -55,7 +55,11 @@ def compare(conn, database, table, older, newer, max_rows=MAX_ROWS, max_results=
     columns, key = _metadata(conn, database, table)
     names = ",".join(db.ident(name) for name in columns)
     order = ",".join(db.ident(name) for name in key)
-    sql = f"SELECT {names} FROM {db.ident(table)} WHERE `snapshot_date`=%s ORDER BY {order} LIMIT %s"
+    examined_limit = min(10_000, max_rows * 2 + 1)
+    sql = (
+        f"SELECT {names} FROM {db.ident(table)} WHERE `snapshot_date`=%s "
+        f"ORDER BY {order} LIMIT %s ROWS EXAMINED {examined_limit}"
+    )
 
     def load(date):
         rows = db.rows(conn, sql, (date, max_rows + 1))

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import re
 import socket
 import ssl
@@ -51,7 +50,24 @@ def validate_profile(p):
         raise ValueError("포트 범위 오류")
 
 
-def connect(p, secret, settings=None, target=False):
+def configure_read_only(conn):
+    with conn.cursor() as cur:
+        cur.execute("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        cur.execute("SET SESSION TRANSACTION READ ONLY")
+        cur.execute(
+            "SET SESSION max_statement_time=2, lock_wait_timeout=1, "
+            "innodb_lock_wait_timeout=1, net_write_timeout=2, wait_timeout=30"
+        )
+        cur.execute(
+            "SELECT @@session.tx_read_only, @@session.tx_isolation, @@autocommit, "
+            "@@max_statement_time, @@lock_wait_timeout, @@innodb_lock_wait_timeout, "
+            "@@net_write_timeout, @@wait_timeout"
+        )
+        if cur.fetchone() != (1, "READ-COMMITTED", 1, 2, 1, 1, 2, 30):
+            raise ValueError("Source 보호 설정 확인 실패")
+
+
+def connect(p, secret, settings=None, target=False, read_only=False):
     validate_profile(p)
     if p["role"] != ("target" if target else "source"):
         raise ValueError("연결 역할 불일치")
@@ -85,23 +101,10 @@ def connect(p, secret, settings=None, target=False):
     if target:
         options["sql_mode"] = "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION,NO_AUTO_VALUE_ON_ZERO"
     conn = pymysql.connect(**options)
-    if not target:
+    if not target or read_only:
         try:
-            with conn.cursor() as cur:
-                cur.execute("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
-                cur.execute("SET SESSION TRANSACTION READ ONLY")
-                cur.execute(
-                    "SET SESSION max_statement_time=2, lock_wait_timeout=1, "
-                    "innodb_lock_wait_timeout=1, net_write_timeout=2, wait_timeout=30"
-                )
-                # tx_read_only also works on MariaDB versions before 11.1.
-                cur.execute(
-                    "SELECT @@session.tx_read_only, @@session.tx_isolation, @@autocommit, "
-                    "@@max_statement_time, @@lock_wait_timeout, @@innodb_lock_wait_timeout, "
-                    "@@net_write_timeout, @@wait_timeout"
-                )
-                if cur.fetchone() != (1, "READ-COMMITTED", 1, 2, 1, 1, 2, 30):
-                    raise ValueError("Source 보호 설정 확인 실패")
+            # tx_read_only also works on MariaDB versions before 11.1.
+            configure_read_only(conn)
         except BaseException:
             conn.close()
             raise
@@ -134,7 +137,7 @@ class Source:
         try:
             # Non-blocking application mutex, not a table/row lock. Released on close.
             with self._conn.cursor() as cur:
-                lock_name = "_snapshot_source_reader_" + hashlib.sha256(self.database.encode()).hexdigest()[:48]
+                lock_name = "_snapshot_source_reader"
                 cur.execute("SELECT GET_LOCK(%s, 0)", (lock_name,))
                 if cur.fetchone() != (1,):
                     raise ValueError("같은 원본 서버에서 다른 스냅샷 조회가 진행 중입니다.")
@@ -215,7 +218,10 @@ class Source:
 def rows(conn, sql, args=()):
     with conn.cursor() as cur:
         cur.execute(sql, args)
-        return cur.fetchall()
+        result = cur.fetchall()
+        if cur.warning_count:
+            raise ValueError("DB 조회 경고: 결과가 제한되었거나 부분 결과일 수 있습니다.")
+        return result
 
 
 def bind_value(value):
