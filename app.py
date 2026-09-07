@@ -169,19 +169,7 @@ if page == STEPS[0]:
         format_func=lambda x: "＋ 새 연결 등록" if x == "new" else label(profiles[x]),
     )
     p = profiles.get(selected, {})
-    demo_defaults = {
-        "name": "로컬 Docker 원본" if role == "source" else "로컬 Docker 대상",
-        "host": "127.0.0.1",
-        "port": 33316 if role == "source" else 33318,
-        "database": "snapshot_source" if role == "source" else "snapshot_target",
-        "user": "root",
-        "secret": "snapshot-test-only",
-    }
-    defaults = demo_defaults if selected == "new" else {}
-    if selected == "new":
-        st.info(
-            "새 연결은 로컬 Docker 테스트 DB 기본값으로 시작합니다. 운영 DB를 연결할 때는 모든 값을 바꾸세요."
-        )
+    defaults = {}
     with st.form("profile_" + role + "_" + selected):
         name = st.text_input(
             "연결 이름", p.get("name", defaults.get("name", "")), placeholder="예: 운영 원본 / 로컬 분석 DB"
