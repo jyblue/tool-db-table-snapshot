@@ -56,7 +56,7 @@ def test_composite_keyset_and_identifier():
 
 def test_source_rejects_write_without_connection():
     src = object.__new__(db.Source)
-    with pytest.raises(ValueError, match="SELECT"):
+    with pytest.raises(ValueError, match="읽기"):
         src.rows("DELETE FROM x")
 
 
@@ -82,6 +82,14 @@ def test_rows_rejects_partial_result_warning():
 
     with pytest.raises(ValueError, match="부분 결과"):
         db.rows(Connection(), "SELECT 1")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("ON", True), ("1", True), ("OFF", False), (b"OFF", False)],
+)
+def test_wsrep_status_detection(value, expected):
+    assert db.wsrep_enabled(lambda sql: [("wsrep_on", value)]) is expected
 
 
 def test_build_spec_keeps_unselected_sources_for_isolation(tmp_path):

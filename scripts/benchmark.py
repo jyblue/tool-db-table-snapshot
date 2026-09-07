@@ -5,6 +5,7 @@ import json
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 import psutil
@@ -22,7 +23,12 @@ def main():
     parser.add_argument("--tables", type=int, default=1)
     parser.add_argument("--mib-per-table", type=int, default=16)
     parser.add_argument("--output", default="benchmark-result.json")
-    parser.add_argument("--reset-disposable-benchmark-dbs", action="store_true", required=True)
+    parser.add_argument(
+        "--reset-disposable-benchmark-dbs",
+        action="store_true",
+        required=True,
+        help="실험용 서버에 고유한 벤치마크 DB를 생성한다는 명시적 확인",
+    )
     args = parser.parse_args()
     if not 1 <= args.tables <= 20 or not 1 <= args.mib_per_table <= 10240:
         parser.error("tables: 1..20; mib-per-table: 1..10240")
@@ -44,20 +50,23 @@ def main():
         root.close()
         target_root.close()
         parser.error("Source and Target must be separate MariaDB instances")
-    for conn, name in ((root, "snapshot_bench_source"), (target_root, "snapshot_bench_target")):
+    suffix = uuid.uuid4().hex[:10]
+    source_db = f"snapshot_bench_source_{suffix}"
+    target_db = f"snapshot_bench_target_{suffix}"
+    # Use fresh names so a misconfigured benchmark cannot remove an existing schema.
+    for conn, name in ((root, source_db), (target_root, target_db)):
         with conn.cursor() as cur:
-            cur.execute(f"DROP DATABASE IF EXISTS `{name}`")
             cur.execute(f"CREATE DATABASE `{name}`")
     with root.cursor() as cur:
         cur.execute("CREATE USER IF NOT EXISTS 'snapshot_bench_reader'@'%' IDENTIFIED BY 'bench-read-only'")
-        cur.execute("GRANT SELECT ON snapshot_bench_source.* TO 'snapshot_bench_reader'@'%'")
+        cur.execute(f"GRANT SELECT ON `{source_db}`.* TO 'snapshot_bench_reader'@'%'")
         for i in range(args.tables):
             cur.execute(
-                f"CREATE TABLE snapshot_bench_source.t{i} (id INT PRIMARY KEY, payload LONGBLOB NOT NULL) ENGINE=InnoDB"
+                f"CREATE TABLE `{source_db}`.t{i} (id INT PRIMARY KEY, payload LONGBLOB NOT NULL) ENGINE=InnoDB"
             )
             for row in range(args.mib_per_table * 4):
                 cur.execute(
-                    f"INSERT INTO snapshot_bench_source.t{i} VALUES (%s,REPEAT(%s,262144))", (row, "x")
+                    f"INSERT INTO `{source_db}`.t{i} VALUES (%s,REPEAT(%s,262144))", (row, "x")
                 )
     with target_root.cursor() as cur:
         cur.execute("SHOW GLOBAL STATUS LIKE 'Innodb_os_log_written'")
@@ -70,7 +79,7 @@ def main():
         role="source",
         host="127.0.0.1",
         port=args.port,
-        database="snapshot_bench_source",
+        database=source_db,
         user="snapshot_bench_reader",
         tls=False,
     )
@@ -79,7 +88,7 @@ def main():
         id="t",
         name="Benchmark target",
         role="target",
-        database="snapshot_bench_target",
+        database=target_db,
         user="root",
         port=args.target_port,
     )
@@ -139,10 +148,11 @@ def main():
         cur.execute("SHOW GLOBAL STATUS LIKE 'Innodb_os_log_written'")
         redo_after = int(cur.fetchone()[1])
         for i in range(args.tables):
-            cur.execute(f"ANALYZE TABLE snapshot_bench_target.t{i}")
+            cur.execute(f"ANALYZE TABLE `{target_db}`.t{i}")
             cur.fetchall()
         cur.execute(
-            "SELECT SUM(DATA_LENGTH+INDEX_LENGTH) FROM information_schema.TABLES WHERE TABLE_SCHEMA='snapshot_bench_target'"
+            "SELECT SUM(DATA_LENGTH+INDEX_LENGTH) FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s",
+            (target_db,),
         )
         target_bytes = int(cur.fetchone()[0] or 0)
     result = dict(

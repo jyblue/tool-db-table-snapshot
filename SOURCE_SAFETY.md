@@ -16,7 +16,7 @@
 | 반복 조회 속도·원본 계속 증가 | 배치 사이 최소 100ms, 조회가 오래 걸리면 측정 시간의 4배만큼 추가 대기. 첫 추출 시작부터 10분 예산을 배치 경계에서 확인. 쿼리 캐시에 데이터 결과를 넣지 않음 |
 | 통신 오류 후 전체 자동 재조회 | 원본 추출 자동 재시도 제거. 실패 원인을 확인한 뒤 수동 재시도만 가능. 대상 재시도는 유지 |
 | 여러 앱의 동시 원본 읽기 | `_snapshot_source_reader` 고정 이름의 비대기 애플리케이션 mutex로 같은 서버의 Source 연결 1개만 허용. 실패하면 즉시 중단. 행·테이블·DB 잠금이 아니며 연결 종료 시 반환 |
-| 대상 쓰기가 원본 인스턴스에 도달 | Source/Target이 같은 MariaDB 인스턴스이면 schema가 달라도 차단. 대상 재연결·복구·정리 때도 원본과 대조. 원본 확인이 불가능하면 쓰기를 진행하지 않음 |
+| 대상 쓰기가 원본 인스턴스에 도달 | Source/Target이 같은 MariaDB 인스턴스이면 schema가 달라도 차단하고, Galera 활성 인스턴스도 차단. 대상 재연결·복구·정리 때도 원본과 대조. 원본 확인이 불가능하면 쓰기를 진행하지 않음 |
 | 연결 테스트·날짜별 비교 | 연결 확인은 서버 정보·테이블 목록만 조회. 날짜별 비교도 등록된 모든 Source와 Target 격리를 확인하고 Target 읽기 연결에 같은 세션 제한을 적용. 부분 결과 경고도 실패 처리 |
 
 수신 값 8MiB 검사는 Python 객체·드라이버 메모리의 절대 상한이 아닙니다. 한 행을 드라이버가 받은 뒤 검사하므로 매우 큰 단일 값은 순간적으로 더 많은 메모리·네트워크를 사용할 수 있습니다. 메타데이터 조회 결과에도 행·수신 값 상한을 적용하므로 1,000개를 초과하는 테이블/컬럼/인덱스 목록은 중단될 수 있습니다.
@@ -36,7 +36,7 @@
 - 인덱스 없는 조회 계획·무제한 배치·동시 원본 연결·동일 서버의 다른 schema 대상·추출 예산 초과를 차단함.
 - 기존 데이터 복사, 날짜 교체, 취소·강제 종료, 대상 롤백·커밋 복구를 회귀 검증함. 원본 통신 실패는 자동 재조회하지 않는 것으로 기대값을 변경함.
 
-실행 방법은 README의 개발 검증을 참고하세요. 두 테스트 포트는 `SNAPSHOT_TEST_PORT`, `SNAPSHOT_TEST_TARGET_PORT`로 지정하며 해당 서버의 테스트 DB를 삭제·재생성합니다.
+실행 방법은 README의 개발 검증을 참고하세요. 두 테스트 포트는 `SNAPSHOT_TEST_PORT`, `SNAPSHOT_TEST_TARGET_PORT`로 지정하며 `SNAPSHOT_TEST_RESET=I_UNDERSTAND_DISPOSABLE_DB_RESET`을 함께 지정한 경우에만 해당 서버의 테스트 DB를 삭제·재생성합니다. 반드시 폐기용 Docker 서버만 지정해야 합니다.
 
 ## 남는 운영 조건
 
@@ -44,6 +44,7 @@
 - 같은 PC의 별도 컨테이너도 자원은 공유합니다. 인스턴스 분리는 대상 쿼리·잠금의 직접 영향을 줄이지만 하드웨어 격리는 아닙니다.
 - 실제 SELECT 전용 계정, DB 측 연결/자원 제한, 운영 모니터링을 병행하세요. root 등 원래 계정의 권한을 앱이 제거하는 것은 아닙니다.
 - 공유 프록시·연결 라우팅 뒤의 물리 배치는 DB 관리자 확인이 필요합니다. 앱은 연결에서 보이는 서버 식별 정보와 주소로 대조하며 하드웨어 토폴로지를 증명하지 못합니다.
+- Galera가 활성화된 인스턴스는 Source/Target 연결을 거부합니다. 일반 복제·프록시·공유 스토리지의 방향과 전파는 앱만으로 증명할 수 없으므로 독립 대상 인스턴스를 사용해야 합니다.
 - 10분 예산은 첫 추출 이후 대상 적재·대기를 포함한 경과 시간입니다. 오래 걸리는 여러 작업은 분리하거나 별도 복제본에서 수행해야 합니다. 이 보호 한계를 UI 설정으로 해제하지 않습니다.
 
 근거: [MariaDB 시간 제한과 한계](https://mariadb.com/docs/server/ha-and-performance/optimization-and-tuning/query-optimizations/aborting-statements), [메타데이터 잠금](https://mariadb.com/docs/server/reference/sql-statements/transactions/metadata-locking), [조회 행 제한](https://mariadb.com/docs/server/ha-and-performance/optimization-and-tuning/query-optimizations/query-limits-and-timeouts), [트랜잭션 격리](https://mariadb.com/docs/server/reference/sql-statements/transactions/set-transaction).

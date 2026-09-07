@@ -23,14 +23,14 @@
 - `test_target_without_date_index_is_rejected`: 날짜 선두 인덱스가 없으면 대상 사전 검사에서 중단.
 - `test_target_load_batches_but_publication_is_one_statement`: 적재 배치 상한과 분할되지 않은 최종 반영 확인.
 
-결과: 전체 단위·UI·통합 테스트 90개 통과. 통합 테스트는 `SNAPSHOT_TEST_RESET=1`을 명시한 폐기용 Docker 서버에서만 실행합니다.
+결과: 전체 단위·UI·통합 테스트 95개 통과. 통합 테스트는 `SNAPSHOT_TEST_RESET=I_UNDERSTAND_DISPOSABLE_DB_RESET`을 명시한 폐기용 Docker 서버에서만 실행합니다.
 
 ## 테스트 환경과 한계
 
 통합 테스트는 README의 두 컨테이너 준비 명령을 사용한 뒤 다음처럼 실행합니다.
 
 ```sh
-SNAPSHOT_TEST_PORT=33316 SNAPSHOT_TEST_TARGET_PORT=33318 SNAPSHOT_TEST_RESET=1 \
+SNAPSHOT_TEST_PORT=33316 SNAPSHOT_TEST_TARGET_PORT=33318 SNAPSHOT_TEST_RESET=I_UNDERSTAND_DISPOSABLE_DB_RESET \
   .venv/bin/pytest -q tests/test_integration.py
 ```
 

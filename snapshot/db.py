@@ -18,7 +18,12 @@ SOURCE_WAIT_SECONDS = 0.1
 
 VERSION_SQL = "SELECT VERSION()"
 IDENTITY_SQL = "SELECT @@hostname, @@port, @@server_id, @@datadir"
-TABLES_SQL = "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s AND TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME"
+WSREP_SQL = "SHOW VARIABLES LIKE 'wsrep_on'"
+TABLES_SQL = (
+    "SELECT TABLE_NAME FROM information_schema.TABLES "
+    "WHERE TABLE_SCHEMA=%s AND TABLE_TYPE='BASE TABLE' "
+    "ORDER BY TABLE_NAME LIMIT 1001 ROWS EXAMINED 2000"
+)
 ENGINE_SQL = "SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s"
 COLUMNS_SQL = "SELECT COLUMN_NAME,COLUMN_TYPE,IS_NULLABLE,CHARACTER_SET_NAME,COLLATION_NAME,EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s ORDER BY ORDINAL_POSITION"
 INDEXES_SQL = "SELECT INDEX_NAME,NON_UNIQUE,SEQ_IN_INDEX,COLUMN_NAME,SUB_PART FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s ORDER BY INDEX_NAME,SEQ_IN_INDEX"
@@ -26,6 +31,7 @@ SOURCE_QUERIES = frozenset(
     (
         VERSION_SQL,
         IDENTITY_SQL,
+        WSREP_SQL,
         TABLES_SQL,
         ENGINE_SQL,
         COLUMNS_SQL,
@@ -184,7 +190,7 @@ class Source:
 
     def rows(self, sql, args=()):
         if sql not in SOURCE_QUERIES:
-            raise ValueError("Source는 지정된 SELECT 템플릿만 허용합니다.")
+            raise ValueError("Source는 지정된 읽기 템플릿만 허용합니다.")
         with self._select(sql, args) as result:
             return result.fetchall()
 
@@ -232,6 +238,17 @@ def rows(conn, sql, args=()):
         return result
 
 
+def wsrep_enabled(query):
+    """Return whether the connected server has active Galera replication."""
+    result = query(WSREP_SQL)
+    if not result:
+        return False
+    value = result[0][1]
+    if isinstance(value, bytes):
+        value = value.decode("ascii", errors="ignore")
+    return str(value).casefold() in {"on", "1", "yes", "true"}
+
+
 def bind_value(value):
     # PyMySQL's timedelta encoder mishandles negative fractional/multi-day TIME.
     if isinstance(value, dt.timedelta):
@@ -276,9 +293,13 @@ def assert_distinct(source_profile, target_profile, source_identity, target_iden
 
 def check_target_isolation(conn, profile, source_profiles, get_secret):
     target_identity = identity(lambda sql: rows(conn, sql))
+    if wsrep_enabled(lambda sql: rows(conn, sql)):
+        raise ValueError("Galera 활성 인스턴스는 Source/Target로 사용할 수 없습니다.")
     for source_profile in source_profiles:
         src = Source(source_profile, get_secret(source_profile))
         try:
+            if wsrep_enabled(src.rows):
+                raise ValueError("Galera 활성 인스턴스는 Source/Target로 사용할 수 없습니다.")
             assert_distinct(source_profile, profile, identity(src.rows), target_identity)
         finally:
             src.close()
@@ -504,6 +525,8 @@ def test_connection(profile, secret, source_profiles=(), get_secret=None):
     if profile["role"] == "source":
         src = Source(profile, secret)
         try:
+            if wsrep_enabled(src.rows):
+                raise ValueError("Galera 활성 인스턴스는 Source/Target로 사용할 수 없습니다.")
             version = src.rows(VERSION_SQL)[0][0]
             names = tables(src)
             return f"{version} · 읽기 전용 연결 / 테이블 목록 {len(names)}개 확인", names
@@ -511,13 +534,7 @@ def test_connection(profile, secret, source_profiles=(), get_secret=None):
             src.close()
     conn = connect(profile, secret, target=True)
     try:
-        target_identity = identity(lambda sql: rows(conn, sql))
-        for source_profile in source_profiles:
-            src = Source(source_profile, get_secret(source_profile))
-            try:
-                assert_distinct(source_profile, profile, identity(src.rows), target_identity)
-            finally:
-                src.close()
+        check_target_isolation(conn, profile, source_profiles, get_secret)
         version = rows(conn, VERSION_SQL)[0][0]
         # TEMPORARY objects cannot overwrite persistent source or target tables.
         with conn.cursor() as cur:

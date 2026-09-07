@@ -53,7 +53,7 @@ Windows에서는 `python3` 대신 `py -3`, `.venv/bin/python` 대신 `.venv\Scri
 | 구분 | 허용 / 차단 |
 | --- | --- |
 | 연결 초기화 | 드라이버의 문자셋·autocommit 설정, UTC `SET SESSION time_zone`, `READ ONLY`·`READ COMMITTED`, 실행/잠금/통신 제한 설정 및 세션 값 검증을 내부 수행 |
-| 서버 정보 | 고정된 `SELECT VERSION()`, `SELECT @@hostname, @@port, @@server_id, @@datadir` 허용 |
+| 서버 정보 | 고정된 `SELECT VERSION()`, 서버 식별자 조회, Galera 활성 여부 확인 허용 |
 | 테이블·컬럼·인덱스 | 코드에 정의된 `information_schema.TABLES / COLUMNS / STATISTICS` 조회 템플릿만 허용 |
 | 데이터 읽기 | 앱이 생성한 `SELECT SQL_NO_CACHE`, 키 비교 `WHERE`, `ORDER BY`, `LIMIT … ROWS EXAMINED`와 해당 쿼리의 `EXPLAIN`만 허용 |
 | 데이터 변경 | `INSERT`, `UPDATE`, `DELETE`, `REPLACE`, `LOAD DATA` 등 실행 인터페이스에서 차단 |
@@ -86,7 +86,7 @@ SQL 입력창은 제공하지 않습니다. 메타데이터는 정확히 일치�
 
 - 가능하면 원본 운영 서버가 아닌 **읽기 복제본 또는 오프라인 덤프**를 사용합니다. 읽기 쿼리도 CPU·I/O·버퍼 풀을 사용하므로 부하를 완전히 없앨 수는 없습니다.
 - 원본에는 별도 **SELECT 전용 계정**을 사용합니다. 앱은 세션을 `READ ONLY`·`READ COMMITTED`로 설정하고 값이 다르면 연결을 닫습니다.
-- Source와 Target은 **서로 다른 MariaDB 인스턴스**에 둡니다. 같은 서버는 schema가 달라도 차단하며, Target 재연결·복구·정리 때도 다시 확인합니다.
+- Source와 Target은 **서로 다른 독립 MariaDB 인스턴스**에 둡니다. 같은 서버는 schema가 달라도 차단하고, Galera가 활성화된 인스턴스도 차단하며, Target 재연결·복구·정리 때도 다시 확인합니다.
 - 원본 SQL 입력창은 없으며, 메타데이터 템플릿과 앱이 생성한 인덱스 기반 조회만 실행합니다. `UPDATE`, `DELETE`, `INSERT`, `DROP`, `ALTER`, `TRUNCATE`, `FOR UPDATE`, `LOCK IN SHARE MODE`, `SLEEP()`, 파일 출력, 다중 문장은 차단합니다.
 - PK 또는 NOT NULL 전체 UNIQUE 키가 있는 테이블만 전체 복사합니다. 키 없는 테이블은 **1,000행 이하 소량 테스트**만 허용합니다.
 - 한 번의 Source 배치는 **최대 1,000행·약 8MiB**입니다. 조회 결과를 모두 받은 뒤 로컬 파일 처리를 시작해 서버 결과를 붙잡지 않습니다.
@@ -98,7 +98,7 @@ SQL 입력창은 제공하지 않습니다. 메타데이터는 정확히 일치�
 - 원본 통신 오류가 나도 자동으로 전체 조회를 반복하지 않습니다. 원인을 확인한 뒤 사용자가 수동 재시도합니다.
 - 상한·경고·잠금 시간 초과가 발생하면 부분 결과를 성공으로 저장하지 않고 실행을 실패 처리합니다.
 - 운영 중에는 실행 시간대, CPU·디스크 I/O, buffer pool, slow query log, 복제 지연, 디스크 여유 공간을 함께 모니터링합니다. 작은 배치와 충분한 대기부터 시작합니다.
-- 세션 제한은 다른 프로그램의 접근이나 계정 권한을 제거하지 않습니다. 원본 가용성이 최우선이면 DB 측 계정 자원 제한과 복제본을 함께 사용합니다.
+- 세션 제한은 다른 프로그램의 접근이나 계정 권한을 제거하지 않습니다. Galera·복제·프록시 토폴로지는 주소만으로 완전히 판별할 수 없으므로 운영자가 독립 인스턴스 여부를 확인해야 합니다. 원본 가용성이 최우선이면 DB 측 계정 자원 제한과 복제본을 함께 사용합니다.
 
 제한값과 실제 잠금·느린 쿼리 검증 결과는 [원본 DB 보호](SOURCE_SAFETY.md)에 정리되어 있습니다.
 
@@ -174,10 +174,10 @@ DB와 데이터는 준비 스크립트가 생성하므로 별도 SQL 입력이 �
 .venv/bin/ruff check .
 .venv/bin/pytest -q -m 'not integration'
 docker compose -f compose.test.yml up -d --wait
-SNAPSHOT_TEST_PORT=33316 SNAPSHOT_TEST_TARGET_PORT=33318 SNAPSHOT_TEST_RESET=1 .venv/bin/pytest -q tests/test_integration.py
+SNAPSHOT_TEST_PORT=33316 SNAPSHOT_TEST_TARGET_PORT=33318 SNAPSHOT_TEST_RESET=I_UNDERSTAND_DISPOSABLE_DB_RESET .venv/bin/pytest -q tests/test_integration.py
 docker compose -f compose.test.yml down -v
 ```
 
-**통합 테스트는 `SNAPSHOT_TEST_RESET=1`을 명시한 경우에만 `snapshot_source`·`snapshot_target` DB를 삭제·재생성합니다. 반드시 제공된 폐기용 Docker 서버에서만 실행하세요.** 고정 비밀번호는 테스트 전용입니다. 쓰기 권한이 있는 root 연결에서도 원본 DML·DDL이 거부되는지 검증합니다.
+**통합 테스트는 `SNAPSHOT_TEST_RESET=I_UNDERSTAND_DISPOSABLE_DB_RESET`을 명시한 경우에만 `snapshot_source`·`snapshot_target` DB를 삭제·재생성합니다. 반드시 제공된 폐기용 Docker 서버에서만 실행하세요.** 고정 비밀번호는 테스트 전용입니다. 쓰기 권한이 있는 root 연결에서도 원본 DML·DDL이 거부되는지 검증합니다.
 
 macOS / Python 3.12 / MariaDB 11.4 검증 및 성능 기록은 [VALIDATION.md](VALIDATION.md)를 참고하세요. Python 3.10·3.12 호환성은 CI에서 검사하며, Windows 실기기 검증은 별도입니다.

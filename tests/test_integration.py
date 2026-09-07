@@ -21,8 +21,10 @@ def env(tmp_path):
     target_port = os.environ.get("SNAPSHOT_TEST_TARGET_PORT")
     if not port or not target_port:
         pytest.skip("Set SNAPSHOT_TEST_PORT and SNAPSHOT_TEST_TARGET_PORT to separate disposable servers")
-    if os.environ.get("SNAPSHOT_TEST_RESET") != "1":
-        pytest.fail("Set SNAPSHOT_TEST_RESET=1 to confirm that the disposable test databases may be reset")
+    if os.environ.get("SNAPSHOT_TEST_RESET") != "I_UNDERSTAND_DISPOSABLE_DB_RESET":
+        pytest.fail(
+            "Set SNAPSHOT_TEST_RESET=I_UNDERSTAND_DISPOSABLE_DB_RESET to confirm disposable DB reset"
+        )
     if int(port) == int(target_port):
         pytest.fail("Source and Target test ports must be different")
     root = pymysql.connect(
@@ -45,9 +47,7 @@ def env(tmp_path):
     query(root.target_conn, "CREATE DATABASE snapshot_target CHARACTER SET utf8mb4")
     with root.cursor() as c:
         c.execute("DROP DATABASE IF EXISTS snapshot_source")
-        c.execute("DROP DATABASE IF EXISTS snapshot_target")
         c.execute("CREATE DATABASE snapshot_source CHARACTER SET utf8mb4")
-        c.execute("CREATE DATABASE snapshot_target CHARACTER SET utf8mb4")
         c.execute("CREATE USER IF NOT EXISTS 'snapshot_reader'@'%' IDENTIFIED BY 'read-test-only'")
         c.execute("GRANT SELECT ON snapshot_source.* TO 'snapshot_reader'@'%'")
         c.execute(
