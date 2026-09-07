@@ -19,6 +19,7 @@ from snapshot.store import ACTIVE, Store
 from snapshot.workflow import (
     HISTORY_PAGES,
     MENU_DESCRIPTIONS,
+    MENU_FLOW,
     NAVIGATION,
     RUN_LABELS,
     STAGE_LABELS,
@@ -128,6 +129,8 @@ st.caption("원본 DB의 테이블을 읽어 날짜별 분석 데이터로 저�
 st.caption("① 연결 설정 → ② 복사 작업 → ③ 소량 테스트 → ④ 전체 실행 → ⑤ 결과·복구")
 st.header(page)
 st.caption(MENU_DESCRIPTIONS[page])
+st.info(f"**이 화면의 진행 순서:** {MENU_FLOW[page]}\n\n**화면 읽는 법:** 입력 영역은 실행할 설정, 로그는 실제 처리 과정과 오류, 출력은 검증·비교 결과입니다.")
+st.divider()
 if "_notice" in st.session_state:
     st.success(st.session_state.pop("_notice"))
 
