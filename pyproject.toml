@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mariadb-table-snapshot"
-version = "0.2.1"
+version = "0.2.2"
 description = "Local MariaDB analytical snapshot tool"
 requires-python = ">=3.10"
 dependencies = ["streamlit>=1.40,<2", "PyMySQL>=1.1.1,<2", "keyring>=25,<26", "psutil>=6,<8"]
