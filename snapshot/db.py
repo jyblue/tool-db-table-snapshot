@@ -67,6 +67,15 @@ def configure_read_only(conn):
             raise ValueError("Source 보호 설정 확인 실패")
 
 
+def value_size(value):
+    """Return a conservative byte estimate for a fetched cell."""
+    if isinstance(value, bytes):
+        return len(value)
+    if isinstance(value, str):
+        return len(value.encode("utf8"))
+    return 32
+
+
 def connect(p, secret, settings=None, target=False, read_only=False):
     validate_profile(p)
     if p["role"] != ("target" if target else "source"):
@@ -154,9 +163,7 @@ class Source:
             # Finish the bounded server read BEFORE local file writes or caller pauses.
             data, size = [], 0
             while row := cur.fetchone():
-                size += sum(len(v) if isinstance(v, (bytes, str)) else 32 for v in row if v is not None)
-                if isinstance(row, tuple):
-                    size += sum(len(v.encode("utf-8")) - len(v) for v in row if isinstance(v, str))
+                size += sum(value_size(value) for value in row if value is not None)
                 if size > SOURCE_MAX_BYTES or len(data) >= SOURCE_MAX_ROWS:
                     raise ValueError("Source 조회 결과 상한 초과 (1,000행 / 8MiB). 배치 크기를 줄이세요.")
                 data.append(row)
