@@ -21,6 +21,24 @@ def setup_profiles(root):
     return store
 
 
+def make_job():
+    return {
+        "id": "j",
+        "name": "주문",
+        "source_id": "s",
+        "target_id": "t",
+        "source_table": "orders",
+        "target_table": "orders",
+        "read_mode": "pk",
+        "batch_rows": 1000,
+        "wait_ms": 300,
+        "connect_timeout": 10,
+        "read_timeout": 60,
+        "write_timeout": 60,
+        "retries": 2,
+    }
+
+
 def test_first_visit_has_ordered_steps_and_blocked_steps_explain_next_action(tmp_path, monkeypatch):
     monkeypatch.setenv("SNAPSHOT_HOME", str(tmp_path / "state"))
     app = AppTest.from_file(str(APP)).run(timeout=20)
@@ -93,27 +111,16 @@ def test_start_moves_to_results_and_success_test_reuses_selection(tmp_path, monk
     root = tmp_path / "state"
     monkeypatch.setenv("SNAPSHOT_HOME", str(root))
     store = setup_profiles(root)
-    job = dict(
-        id="j",
-        name="주문",
-        source_id="s",
-        target_id="t",
-        source_table="orders",
-        target_table="orders",
-        read_mode="pk",
-        batch_rows=1000,
-        wait_ms=300,
-        connect_timeout=10,
-        read_timeout=60,
-        write_timeout=60,
-        retries=2,
-    )
+    job = make_job()
     store.save("backup_job", job)
+
+    started = []
 
     def fake_start(store, spec, secrets):
         rid = store.queue(spec)
         store.update_run(rid, state="SUCCESS")
         store.update_table(rid, 0, stage="READY", extracted=100, loaded=100)
+        started.append(rid)
         return rid
 
     monkeypatch.setattr(process, "start", fake_start)
@@ -123,14 +130,53 @@ def test_start_moves_to_results_and_success_test_reuses_selection(tmp_path, monk
     assert not app.exception
     assert app.sidebar.radio[0].value == STEPS[2]
     assert any("대상 DB의 임시 테이블" in message.value for message in app.info)
+    button(app, "취소").click().run()
+    assert not app.exception
+    assert app.sidebar.radio[0].value == STEPS[2]
+    assert started == []
+    button(app, "1개 작업 테스트 시작").click().run()
+    assert any("대상 DB의 임시 테이블" in message.value for message in app.info)
     button(app, "확인하고 계속").click().run()
     assert not app.exception
     assert app.sidebar.radio[0].value == STEPS[4]
+    assert len(started) == 1
     button(app, "다음 · 같은 작업 전체 실행").click().run()
     assert not app.exception
     assert app.sidebar.radio[0].value == STEPS[3]
     assert app.multiselect[0].value == ["j"]
     assert any("모든 작업" in x.value for x in app.success)
+
+
+def test_confirmation_rechecks_new_active_run(tmp_path, monkeypatch):
+    from snapshot import process
+
+    root = tmp_path / "state"
+    monkeypatch.setenv("SNAPSHOT_HOME", str(root))
+    store = setup_profiles(root)
+    job = make_job()
+    store.save("backup_job", job)
+    started = []
+
+    def fake_start(store, spec, secrets):
+        started.append(True)
+        return "unexpected"
+
+    monkeypatch.setattr(process, "start", fake_start)
+    app = AppTest.from_file(str(APP)).run(timeout=20)
+    button(app, "1개 작업 테스트 시작").click().run()
+    blocking = store.queue(
+        {
+            "date": "2026-09-06",
+            "limit": 100,
+            "jobs": [job],
+            "profiles": {p["id"]: p for p in store.profiles()},
+            "work_dir": str(root / "files"),
+        }
+    )
+    store.update_run(blocking, state="RUNNING")
+    button(app, "확인하고 계속").click().run()
+    assert not app.exception
+    assert started == []
 
 
 def test_changed_settings_are_not_marked_tested(tmp_path):

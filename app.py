@@ -63,7 +63,9 @@ def confirmation_dialog(pending):
 def confirm_button(action, label_text, title, message, container=None, **button_kwargs):
     if st.session_state.get(CONFIRMED_ACTION) == action:
         st.session_state.pop(CONFIRMED_ACTION)
-        return True
+        # Re-check the current page state after the modal round-trip. Another
+        # run may have started while the dialog was open.
+        return not button_kwargs.get("disabled", False)
     button_area = container if container is not None else st
     if button_area.button(label_text, **button_kwargs):
         st.session_state[PENDING_CONFIRMATION] = {

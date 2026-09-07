@@ -462,7 +462,13 @@ def compare_schema(actual, expected):
 
 def has_leading_index(schema_info, column):
     return any(
-        any(sequence == 1 and prefix is None and indexed_column == column for sequence, indexed_column, prefix in entries)
+        any(
+            sequence == 1
+            and prefix is None
+            and isinstance(indexed_column, str)
+            and indexed_column.casefold() == column.casefold()
+            for sequence, indexed_column, prefix in entries
+        )
         for entries in schema_info.get("indexes", {}).values()
     )
 

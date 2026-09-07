@@ -72,3 +72,43 @@ def test_compare_limits_displayed_results(monkeypatch):
     )
     assert len(result["added"]) + len(result["removed"]) + len(result["changed"]) == 1
     assert result["results_truncated"] is True
+
+
+def test_compare_omits_identical_rows(monkeypatch):
+    def rows_with_identical_row(conn, sql, args=()):
+        if "ENGINE" in sql:
+            return [("InnoDB",)]
+        if "information_schema.COLUMNS" in sql:
+            return [
+                ("snapshot_date", "date", "NO", None, None, ""),
+                ("id", "int", "NO", None, None, ""),
+                ("status", "varchar(10)", "NO", "utf8mb4", "utf8mb4_bin", ""),
+            ]
+        if "information_schema.STATISTICS" in sql:
+            return [("PRIMARY", 0, 1, "snapshot_date", None), ("PRIMARY", 0, 2, "id", None)]
+        if args[0] == dt.date(2026, 9, 6):
+            return [(args[0], 1, "same")]
+        return [(args[0], 1, "same")]
+
+    monkeypatch.setattr(compare.db, "rows", rows_with_identical_row)
+    result = compare.compare(FakeConnection(), "target", "orders", dt.date(2026, 9, 6), dt.date(2026, 9, 7))
+    assert result["added"] == result["removed"] == result["changed"] == []
+    assert result["results_truncated"] is False
+
+
+def test_compare_rejects_missing_date_index(monkeypatch):
+    def rows_without_date_index(conn, sql, args=()):
+        if "ENGINE" in sql:
+            return [("InnoDB",)]
+        if "information_schema.COLUMNS" in sql:
+            return [
+                ("snapshot_date", "date", "NO", None, None, ""),
+                ("id", "int", "NO", None, None, ""),
+            ]
+        if "information_schema.STATISTICS" in sql:
+            return [("PRIMARY", 0, 1, "id", None)]
+        return []
+
+    monkeypatch.setattr(compare.db, "rows", rows_without_date_index)
+    with pytest.raises(ValueError, match="snapshot_date 선두 인덱스"):
+        compare.compare(FakeConnection(), "target", "orders", dt.date(2026, 9, 6), dt.date(2026, 9, 7))

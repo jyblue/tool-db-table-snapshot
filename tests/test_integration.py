@@ -48,7 +48,9 @@ def env(tmp_path):
     with root.cursor() as c:
         c.execute("DROP DATABASE IF EXISTS snapshot_source")
         c.execute("CREATE DATABASE snapshot_source CHARACTER SET utf8mb4")
-        c.execute("CREATE USER IF NOT EXISTS 'snapshot_reader'@'%' IDENTIFIED BY 'read-test-only'")
+        # Reset the disposable account so repeated runs cannot inherit grants or passwords.
+        c.execute("DROP USER IF EXISTS 'snapshot_reader'@'%'")
+        c.execute("CREATE USER 'snapshot_reader'@'%' IDENTIFIED BY 'read-test-only'")
         c.execute("GRANT SELECT ON snapshot_source.* TO 'snapshot_reader'@'%'")
         c.execute(
             "CREATE TABLE snapshot_source.records (a INT NOT NULL,b INT NOT NULL, s LONGTEXT NULL, amount DECIMAL(30,8), payload LONGBLOB, stamp DATETIME(6), duration TIME(6), generated_value INT GENERATED ALWAYS AS (a+b) STORED, PRIMARY KEY(a,b)) ENGINE=InnoDB"
@@ -116,7 +118,9 @@ def env(tmp_path):
     root.close()
 
 
-def run(env, ids=["j"], date="2026-09-06", limit=None, engine_cls=Engine, retry_of=None):
+def run(env, ids=None, date="2026-09-06", limit=None, engine_cls=Engine, retry_of=None):
+    if ids is None:
+        ids = ["j"]
     store, root, j, secrets, path = env
     spec = build_spec(store, ids, date, limit, path)
     rid = store.queue(spec, retry_of)

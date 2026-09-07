@@ -21,11 +21,15 @@ def target_tables(conn, database):
 
 def _metadata(conn, database, table):
     db.ident(table)
-    schema = db.schema(lambda sql, args=(): db.rows(conn, sql, args), database, table)
+    schema = db.schema(
+        lambda sql, args=(): db.rows(conn, sql, args), database, table, include_indexes=True
+    )
     columns = [column["name"] for column in schema["columns"]]
-    if "snapshot_date" not in columns:
+    if not any(name.casefold() == "snapshot_date" for name in columns):
         raise ValueError("스냅샷 날짜 컬럼이 없는 테이블입니다.")
-    key = [name for name in schema["key"] if name != "snapshot_date"]
+    if not db.has_leading_index(schema, "snapshot_date"):
+        raise ValueError("날짜별 비교에는 snapshot_date 선두 인덱스가 필요합니다.")
+    key = [name for name in schema["key"] if name.casefold() != "snapshot_date"]
     if not key:
         raise ValueError("날짜별 비교에는 snapshot_date 외의 PK 또는 UNIQUE 키가 필요합니다.")
     return columns, key
@@ -85,7 +89,7 @@ def compare(conn, database, table, older, newer, max_rows=MAX_ROWS, max_results=
         differences = {
             name: {"older": old_row[i], "newer": new_row[i]}
             for i, name in enumerate(columns)
-            if name != "snapshot_date" and old_row[i] != new_row[i]
+            if name.casefold() != "snapshot_date" and old_row[i] != new_row[i]
         }
         if differences and len(changed_all) < max_results:
             changed_all.append({"key": row_key, "columns": differences})
@@ -100,7 +104,7 @@ def compare(conn, database, table, older, newer, max_rows=MAX_ROWS, max_results=
         1
         for row_key in old_rows.keys() & new_rows.keys()
         if any(
-            name != "snapshot_date" and old_rows[row_key][i] != new_rows[row_key][i]
+            name.casefold() != "snapshot_date" and old_rows[row_key][i] != new_rows[row_key][i]
             for i, name in enumerate(columns)
         )
     )
