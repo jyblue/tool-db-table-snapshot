@@ -1,13 +1,12 @@
 [build-system]
-# 61 is the first setuptools release with full PEP 621 support and is
-# available on Python 3.10 mirrors that do not carry newer build tools.
-# wheel is required by setuptools' editable build backend.
+# Setuptools 61 is the first release with full PEP 621 support.
+# wheel is required by the editable build backend.
 requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "mariadb-table-snapshot"
-version = "0.2.9"
+version = "0.2.10"
 description = "Local MariaDB analytical snapshot tool"
 requires-python = ">=3.10"
 dependencies = ["streamlit>=1.40,<2", "PyMySQL>=1.1.1,<2", "keyring>=25,<26", "psutil>=6,<8"]

@@ -8,7 +8,7 @@
 
 ## 로컬 실행
 
-Git 설치 없이 [최신 Release](https://github.com/jyblue/tool-db-table-snapshot/releases/latest)에서 **`mariadb-snapshot-v0.2.9.zip`**을 다운로드하고 압축을 푸세요. 아래 명령은 압축을 푼 프로젝트 폴더에서 실행합니다.
+사내에서 승인된 배포 경로의 **release ZIP**을 다운로드하고 압축을 푸세요. 실행 PC에는 Git이 필요하지 않으며, 배포 ZIP에는 Git 저장소와 개발용 CI workflow가 들어 있지 않습니다. 아래 명령은 압축을 푼 프로젝트 폴더에서 실행합니다.
 
 Python **3.10 이상**, 원본 MariaDB 접속 정보, 별도 MariaDB 인스턴스의 쓰기 가능한 대상 DB/schema, 중간 파일용 디스크 공간이 필요합니다. 대상 schema는 미리 생성하세요. 스냅샷 테이블은 앱이 생성합니다. 일반 사용에는 Docker가 필요 없습니다.
 
@@ -17,7 +17,9 @@ Python **3.10 이상**, 원본 MariaDB 접속 정보, 별도 MariaDB 인스턴�
 - **Windows**: `start-windows.bat` 더블클릭 또는 PowerShell에서 `.\start-windows.bat`
 - **macOS**: 터미널에서 `./start-macos.sh`
 
-최초 실행 시 가상환경과 패키지를 설치합니다(패키지 저장소 접근 필요). 사내 Python 저장소를 사용하도록 pip를 구성한 뒤 실행하세요. 이후 브라우저에서 **http://127.0.0.1:8501**을 엽니다. 다음 실행에도 같은 시작 파일을 사용합니다.
+실행 전에 필요한 Python 패키지를 수동 설치하세요. 시작 파일은 패키지를 다운로드하거나 외부 주소에 연결하지 않고, 설치 상태를 확인한 뒤 Streamlit를 **127.0.0.1**에만 엽니다. 이후 브라우저에서 **http://127.0.0.1:8501**을 엽니다. 다음 실행에도 같은 시작 파일을 사용합니다.
+
+실행 중 네트워크 통신은 사용자가 등록한 Source·Target MariaDB와 로컬 브라우저뿐입니다. Git, webhook, telemetry, 임의 HTTP API 호출은 하지 않습니다.
 
 직접 설치·실행하거나 의존성을 업데이트하려면(macOS/Linux):
 
@@ -36,9 +38,9 @@ python -m venv .venv
 .venv\Scripts\python.exe -m streamlit run app.py --server.address 127.0.0.1
 ```
 
-위 명령의 `python`이 3.10 미만이면 설치된 3.10 이상 인터프리터로 바꾸세요(예: `py -3.12`). `start-windows.bat`은 Python Launcher에 등록된 3.10 이상 버전을 자동으로 찾아 사용하며, 실행 중에는 `setuptools` editable build를 사용하지 않습니다. 설치 실패 시 pip의 실제 오류를 화면에 남깁니다.
+위 명령의 `python`이 3.10 미만이면 설치된 3.10 이상 인터프리터로 바꾸세요(예: `py -3.12`). `start-windows.bat`은 Python Launcher에 등록된 3.10 이상 버전을 자동으로 찾아 사용합니다. 시작 파일에서 패키지 설치가 필요하다는 메시지가 나오면 위 수동 설치 명령을 실행하세요.
 
-Windows에서 `setuptools` 버전을 찾을 수 없다는 오류가 나면 `.venv`를 삭제하고 `start-windows.bat`을 다시 실행하세요. 시작 파일은 `setuptools`가 필요한 editable 설치 대신 `requirements.txt`의 실행용 wheel만 설치합니다. `Python 3.10 or newer was not found`가 나오면 `py -0p`로 설치된 인터프리터를 확인하고 Python 3.10 이상을 Python Launcher와 함께 설치하세요.
+`Python 3.10 or newer was not found`가 나오면 `py -0p`로 설치된 인터프리터를 확인하고 Python 3.10 이상을 Python Launcher와 함께 설치하세요.
 
 앱 종료는 실행 창에서 **Ctrl+C**입니다. 브라우저나 앱 서버를 닫아도 별도 복사 프로세스는 계속 실행될 수 있으므로, 복사를 중단하려면 화면에서 **복사 취소**를 누르세요.
 
@@ -183,6 +185,8 @@ DB와 데이터는 준비 스크립트가 생성하므로 별도 SQL 입력이 �
 일시 중지는 `docker compose -f compose.test.yml stop`, 컨테이너와 테스트 데이터 정리는 `docker compose -f compose.test.yml down -v`입니다.
 
 ## 개발 검증
+
+사외 개발 환경에서는 Git으로 버전을 관리할 수 있습니다. 다음 검증 명령은 로컬에서만 실행되며, Git 명령이나 외부 전송을 수행하지 않습니다.
 
 ```sh
 .venv/bin/python -m pip install -e '.[test]'

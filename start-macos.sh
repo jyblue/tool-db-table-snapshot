@@ -13,6 +13,8 @@ fi
   exit 1
 }
 if ! .venv/bin/python -c 'import streamlit, pymysql, keyring, psutil' >/dev/null 2>&1; then
-  .venv/bin/python -m pip install -r requirements.txt
+  echo "필수 패키지가 없습니다. requirements.txt를 설치한 뒤 다시 실행하세요." >&2
+  echo ".venv/bin/python -m pip install -r requirements.txt" >&2
+  exit 1
 fi
 exec .venv/bin/python -m streamlit run app.py --server.address 127.0.0.1

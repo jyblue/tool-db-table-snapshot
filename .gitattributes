@@ -1,0 +1,7 @@
+# 개발용 Git/CI 메타데이터는 배포 archive에 포함하지 않습니다.
+.github/ export-ignore
+.gitignore export-ignore
+.gitattributes export-ignore
+tests/ export-ignore
+benchmark-*.json export-ignore
+mariadb_table_snapshot.egg-info/ export-ignore

@@ -28,18 +28,13 @@ if not exist ".venv\Scripts\python.exe" (
   if errorlevel 1 goto venv_version
 )
 
-rem Install runtime wheels directly. This avoids the editable-build step that
-rem can fail while resolving a setuptools build dependency on restricted networks.
 .venv\Scripts\python.exe -c "import streamlit, pymysql, keyring, psutil" >nul 2>&1
-if errorlevel 1 (
-  .venv\Scripts\python.exe -m pip install -r requirements.txt
-  if errorlevel 1 goto install_fail
-)
+if errorlevel 1 goto deps_missing
 .venv\Scripts\python.exe -m streamlit run app.py --server.address 127.0.0.1
 if errorlevel 1 goto run_fail
 exit /b 0
 :no_python
-echo Python 3.10 or newer was not found. Install Python from https://www.python.org/downloads/windows/ and rerun this file.
+echo Python 3.10 or newer was not found. Install Python 3.10 or newer from your approved software source and rerun this file.
 pause
 exit /b 1
 :venv_fail
@@ -50,8 +45,9 @@ exit /b 1
 echo The existing .venv uses Python older than 3.10. Delete the .venv folder and rerun this file.
 pause
 exit /b 1
-:install_fail
-echo Dependency installation failed. The detailed pip error is shown above; check the network or package index and rerun.
+:deps_missing
+echo Required packages are missing. Install requirements.txt, then rerun this file.
+echo .venv\Scripts\python.exe -m pip install -r requirements.txt
 pause
 exit /b 1
 :run_fail
