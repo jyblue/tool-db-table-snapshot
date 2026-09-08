@@ -606,13 +606,18 @@ elif page == HISTORY_PAGES[2]:
     credentials([target_profile, *compare_sources], "compare")
     conn = None
     try:
-        conn = db.connect(target_profile, password(target_profile, secrets), target=True, read_only=True)
-        db.check_target_isolation(
-            conn,
+        # Check server identity before selecting the target schema. This keeps
+        # an aliased Source/Target endpoint from failing with a misleading
+        # unknown-database error before the isolation guard runs.
+        conn = db.connect(
             target_profile,
-            compare_sources,
-            lambda p: password(p, secrets),
+            password(target_profile, secrets),
+            target=True,
+            read_only=True,
+            select_database=False,
         )
+        db.check_target_isolation(conn, target_profile, compare_sources, lambda p: password(p, secrets))
+        conn.select_db(target_profile["database"])
         names = target_tables(conn, target_profile["database"])
         if not names:
             st.info("비교할 대상 스냅샷 테이블이 없습니다. 먼저 전체 실행을 완료하세요.")

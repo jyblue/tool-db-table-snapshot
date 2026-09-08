@@ -544,6 +544,19 @@ def test_target_connection_test_checks_source_alias_first(env):
         db.test_connection(target, env[3]["t"], [profiles["s"]], lambda p: env[3][p["id"]])
 
 
+def test_target_isolation_can_run_before_schema_selection(env):
+    profiles = {p["id"]: p for p in env[0].profiles()}
+    target = dict(profiles["t"], database="missing_target", port=env[1].port)
+    conn = db.connect(target, env[3]["t"], target=True, read_only=True, select_database=False)
+    try:
+        with pytest.raises(ValueError, match="같은 서버"):
+            db.check_target_isolation(
+                conn, target, [profiles["s"]], lambda p: env[3][p["id"]]
+            )
+    finally:
+        conn.close()
+
+
 def test_privileged_source_is_read_only_on_every_connection(env):
     store, root, _, secrets, _ = env
     profile = dict(next(p for p in store.profiles() if p["id"] == "s"), user="root")
