@@ -8,22 +8,44 @@
 
 ## 로컬 실행
 
-Git 설치 없이 [최신 Release](https://github.com/jyblue/tool-db-table-snapshot/releases/latest)에서 **`mariadb-snapshot-v0.2.7.zip`**을 다운로드하고 압축을 푸세요. 아래 명령은 압축을 푼 프로젝트 폴더에서 실행합니다.
+Git 설치 없이 [최신 Release](https://github.com/jyblue/tool-db-table-snapshot/releases/latest)에서 **`mariadb-snapshot-v0.2.8.zip`**을 다운로드하고 압축을 푸세요. 아래 명령은 압축을 푼 프로젝트 폴더에서 실행합니다.
 
-Python **3.10 이상**, 원본 MariaDB 접속 정보, 별도 MariaDB 인스턴스의 쓰기 가능한 대상 DB/schema, 중간 파일용 디스크 공간이 필요합니다. 대상 schema는 미리 생성하세요. 스냅샷 테이블은 앱이 생성합니다. 일반 사용에는 Docker가 필요 없습니다.
+Python **3.10 이상**, 사내 Python 패키지 미러, 원본 MariaDB 접속 정보, 별도 MariaDB 인스턴스의 쓰기 가능한 대상 DB/schema, 중간 파일용 디스크 공간이 필요합니다. 대상 schema는 미리 생성하세요. 스냅샷 테이블은 앱이 생성합니다. 일반 사용에는 Docker가 필요 없습니다.
 
 프로젝트 폴더에서 실행합니다.
 
 - **Windows**: `start-windows.bat` 더블클릭 또는 PowerShell에서 `.\start-windows.bat`
 - **macOS**: 터미널에서 `./start-macos.sh`
 
-최초 실행 시 가상환경과 패키지를 설치합니다(인터넷 필요). 이후 브라우저에서 **http://127.0.0.1:8501**을 엽니다. 다음 실행에도 같은 시작 파일을 사용합니다.
+최초 실행 시 가상환경과 패키지를 사내 미러에서 설치합니다. 외부 PyPI에는 연결하지 않습니다. 이후 브라우저에서 **http://127.0.0.1:8501**을 엽니다. 다음 실행에도 같은 시작 파일을 사용합니다.
+
+### 사내 패키지 미러 설정
+
+의존성 설치 전에 미러의 Simple API 주소를 `SNAPSHOT_PIP_INDEX_URL`에 지정하세요. 기존에 사내 미러를 `PIP_INDEX_URL` 또는 pip.ini의 `global.index-url`로 설정했다면 그대로 사용할 수도 있습니다. `--isolated` 설치로 외부 추가 인덱스와 그 밖의 pip 설정은 무시합니다. HTTPS와 정상 인증서를 사용하는 미러에는 `SNAPSHOT_PIP_TRUSTED_HOST`가 필요하지 않습니다. HTTP 미러 또는 사설 CA를 사용하는 경우에만 URL이 아닌 호스트명으로 지정하세요.
+
+Windows PowerShell:
+
+```powershell
+$env:SNAPSHOT_PIP_INDEX_URL = "https://packages.example.local/simple"
+$env:SNAPSHOT_PIP_TRUSTED_HOST = "packages.example.local" # HTTP/사설 CA인 경우만
+.\start-windows.bat
+```
+
+macOS/Linux:
+
+```sh
+SNAPSHOT_PIP_INDEX_URL="https://packages.example.local/simple" \
+SNAPSHOT_PIP_TRUSTED_HOST="packages.example.local" \
+./start-macos.sh
+```
+
+호스트 신뢰 설정이 불필요하면 `SNAPSHOT_PIP_TRUSTED_HOST`를 생략하세요. 미러 주소를 지정하지 않았고 pip.ini에도 `global.index-url`이 없으면 시작 파일이 설치를 중단하고 설정 방법을 표시합니다.
 
 직접 설치·실행하거나 의존성을 업데이트하려면(macOS/Linux):
 
 ```sh
 python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m pip --isolated install --index-url "$SNAPSHOT_PIP_INDEX_URL" -r requirements.txt
 .venv/bin/python -m streamlit run app.py --server.address 127.0.0.1
 ```
 
@@ -32,13 +54,13 @@ Windows에서 직접 설치할 때는 다음처럼 실행합니다.
 ```bat
 python -c "import sys; assert sys.version_info >= (3, 10), sys.version"
 python -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe -m pip --isolated install --index-url "%SNAPSHOT_PIP_INDEX_URL%" -r requirements.txt
 .venv\Scripts\python.exe -m streamlit run app.py --server.address 127.0.0.1
 ```
 
 위 명령의 `python`이 3.10 미만이면 설치된 3.10 이상 인터프리터로 바꾸세요(예: `py -3.12`). `start-windows.bat`은 Python Launcher에 등록된 3.10 이상 버전을 자동으로 찾아 사용하며, 실행 중에는 `setuptools` editable build를 사용하지 않습니다. 설치 실패 시 pip의 실제 오류를 화면에 남깁니다.
 
-Windows에서 `setuptools` 버전을 찾을 수 없다는 오류가 나면 `.venv`를 삭제하고 `start-windows.bat`을 다시 실행하세요. 시작 파일은 `setuptools`가 필요한 editable 설치 대신 `requirements.txt`의 실행용 wheel만 설치합니다. `Python 3.10 or newer was not found`가 나오면 `py -0p`로 설치된 인터프리터를 확인하고 Python 3.10 이상을 Python Launcher와 함께 설치하세요.
+Windows에서 `setuptools` 버전을 찾을 수 없다는 오류가 나면 `.venv`를 삭제하고 `start-windows.bat`을 다시 실행하세요. 시작 파일은 `setuptools`가 필요한 editable 설치 대신 `requirements.txt`의 실행용 wheel만 설치합니다. 사내 미러가 HTTP이거나 사설 인증서를 사용하면 `SNAPSHOT_PIP_TRUSTED_HOST`를 미러의 호스트명으로 지정해야 하며, URL 전체나 경로를 넣으면 안 됩니다. `Python 3.10 or newer was not found`가 나오면 `py -0p`로 설치된 인터프리터를 확인하고 Python 3.10 이상을 Python Launcher와 함께 설치하세요.
 
 앱 종료는 실행 창에서 **Ctrl+C**입니다. 브라우저나 앱 서버를 닫아도 별도 복사 프로세스는 계속 실행될 수 있으므로, 복사를 중단하려면 화면에서 **복사 취소**를 누르세요.
 
