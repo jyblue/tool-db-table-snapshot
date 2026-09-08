@@ -34,6 +34,8 @@ Source에는 임의 SQL 입력 경로가 없습니다. Source cursor에 도달�
 
 Target에서도 연결·격리 검사를 위해 위의 `VERSION`, `IDENTITY`, `WSREP`, `TABLES`, `COLUMNS`, `STATISTICS` 계열 조회를 사용합니다. 다음은 Target에만 실행되는 명령입니다.
 
+Target 연결은 같은 인스턴스 검사를 먼저 수행하도록 초기 연결에서 기본 schema를 선택하지 않고, 검사가 통과한 뒤 PyMySQL의 `select_db()`로 대상 schema를 선택합니다. `select_db()`는 별도 SQL 문자열이 아닌 드라이버 프로토콜 호출입니다.
+
 | 위치 | 실행 SQL | 한 줄 설명 |
 | --- | --- | --- |
 | `db.connect(target=True)` | `SET SESSION time_zone='+00:00'` 및 `sql_mode=STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION,NO_AUTO_VALUE_ON_ZERO` | 적재 값의 시간대와 타입 오류 처리를 고정합니다. (`sql_mode`는 연결 옵션으로 전송됩니다.) |

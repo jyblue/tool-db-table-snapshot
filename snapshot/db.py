@@ -83,7 +83,7 @@ def value_size(value):
     return 32
 
 
-def connect(p, secret, settings=None, target=False, read_only=False):
+def connect(p, secret, settings=None, target=False, read_only=False, select_database=True):
     validate_profile(p)
     if p["role"] != ("target" if target else "source"):
         raise ValueError("연결 역할 불일치")
@@ -96,7 +96,6 @@ def connect(p, secret, settings=None, target=False, read_only=False):
     options = dict(
         host=p["host"],
         port=int(p["port"]),
-        database=p["database"],
         user=p["user"],
         password=secret,
         charset="utf8mb4",
@@ -109,6 +108,8 @@ def connect(p, secret, settings=None, target=False, read_only=False):
         ssl=tls,
         ssl_disabled=not bool(tls),
     )
+    if select_database:
+        options["database"] = p["database"]
     if not target:
         for name in ("connect_timeout", "read_timeout", "write_timeout"):
             options[name] = min(options[name], 5)
@@ -538,9 +539,10 @@ def test_connection(profile, secret, source_profiles=(), get_secret=None):
             return f"{version} · 읽기 전용 연결 / 테이블 목록 {len(names)}개 확인", names
         finally:
             src.close()
-    conn = connect(profile, secret, target=True)
+    conn = connect(profile, secret, target=True, select_database=False)
     try:
         check_target_isolation(conn, profile, source_profiles, get_secret)
+        conn.select_db(profile["database"])
         version = rows(conn, VERSION_SQL)[0][0]
         # TEMPORARY objects cannot overwrite persistent source or target tables.
         with conn.cursor() as cur:

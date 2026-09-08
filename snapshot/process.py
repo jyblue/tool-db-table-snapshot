@@ -132,7 +132,9 @@ def cleanup(store, run_id, ephemeral):
         raise ValueError("다른 실행이 완료 파일을 사용 중일 수 있습니다.")
     spec = run["spec"]
     profile = spec["profiles"][spec["jobs"][0]["target_id"]]
-    conn = db.connect(profile, password(profile, ephemeral), spec["jobs"][0], target=True)
+    conn = db.connect(
+        profile, password(profile, ephemeral), spec["jobs"][0], target=True, select_database=False
+    )
     try:
         db.check_target_isolation(
             conn,
@@ -140,6 +142,7 @@ def cleanup(store, run_id, ephemeral):
             [p for p in spec["profiles"].values() if p["role"] == "source"],
             lambda p: password(p, ephemeral),
         )
+        conn.select_db(profile["database"])
         with conn.cursor() as cur:
             for item in store.tables(run_id):
                 expected = f"_snapshot_s_{run_id}_{item['ordinal']}"

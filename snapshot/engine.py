@@ -131,7 +131,9 @@ def reconcile(store, run_id, secrets):
         return run["state"]
     spec = run["spec"]
     profile = spec["profiles"][spec["jobs"][0]["target_id"]]
-    conn = db.connect(profile, password(profile, secrets), spec["jobs"][0], target=True)
+    conn = db.connect(
+        profile, password(profile, secrets), spec["jobs"][0], target=True, select_database=False
+    )
     try:
         db.check_target_isolation(
             conn,
@@ -139,6 +141,7 @@ def reconcile(store, run_id, secrets):
             [p for p in spec["profiles"].values() if p["role"] == "source"],
             lambda p: password(p, secrets),
         )
+        conn.select_db(profile["database"])
         acquire_lock(conn, profile["database"])
         result = db.rows(
             conn, f"SELECT snapshot_date,tables_json FROM {db.ident(db.MARKER)} WHERE run_id=%s", (run_id,)
@@ -244,7 +247,7 @@ class Engine:
     def target(self):
         job = self.spec["jobs"][0]
         p = self.spec["profiles"][job["target_id"]]
-        conn = db.connect(p, password(p, self.secrets), job, target=True)
+        conn = db.connect(p, password(p, self.secrets), job, target=True, select_database=False)
         try:
             db.check_target_isolation(
                 conn,
@@ -252,6 +255,7 @@ class Engine:
                 [p for p in self.spec["profiles"].values() if p["role"] == "source"],
                 lambda p: password(p, self.secrets),
             )
+            conn.select_db(p["database"])
             return conn
         except BaseException:
             conn.close()
